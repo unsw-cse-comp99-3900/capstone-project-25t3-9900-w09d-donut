@@ -1,0 +1,19 @@
+# Ignore version control metadata
+.git
+
+# Ignore local environment files
+.env
+.env.local
+
+# Ignore Python cache artifacts
+__pycache__
+**/__pycache__
+*.pyc
+
+# Ignore Node dependencies and build output
+node_modules
+client/node_modules
+client/dist
+
+# Ignore local databases
+storage/sqlite/research.db
