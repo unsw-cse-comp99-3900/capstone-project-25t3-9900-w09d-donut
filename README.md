@@ -1,7 +1,7 @@
 # Project Template
 
 ## Tech Stack
-- React for the browser experience.
+- React for the browser experiences.
 - Flask for backend.
 - LangChain-driven agents for planning, retrieval, document processing, RAG drafting, and refinement loops.
 - SQLite for transactional data, ChromaDB for vector search, plus arXiv API and an LLM provider such as Gemini.
