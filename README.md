@@ -53,8 +53,8 @@
   3. Copy `.env.example` to `.env` and supply real keys (LLM, arXiv, and so on).
   4. Run the app in dev mode: `FLASK_ENV=development flask --app server.app run`.
 - **Client**
-  1. `cd client` and run `npm install`.
-  2. Start the dev server with `npm run dev` (Vite default port 5173, proxied to Flask at 5000).
+  1. `cd client` and run `npm install` (or `npm ci` when using the lockfile).
+  2. Start the dev server with `npm start` (CRA default port 3000 with `/api` calls proxied to Flask at 5000).
 - **AI and Storage**
   - Populate SQLite and Chroma once seed scripts are implemented: `python storage/seeds/seed_data.py`.
   - Add LangChain configuration (models, vector store) inside the corresponding agent constructors.
@@ -154,6 +154,13 @@ graph TD
     %% Loop repeats from step 8 onward
 ```
 ## Docker Deployment
-1.  Copy `.env.example` to `.env` and provide real credentials before starting the stack.
+1. Copy `.env.example` to `.env` and provide real credentials before starting the stack.
 2. Build and launch the containers with `docker compose up --build`.
-3. Open `http://localhost:5173` to view the client shell. The Flask API is exposed at `http://localhost:5000/api/health`.
+3. Open `http://localhost:3000` to view the client shell. The Flask API is exposed at `http://localhost:5500/api/health`.
+4. Code changes under `server/`, `ai_agents/`, and `storage/` are mounted into the backend container for live reload; rebuild the client image (`docker compose build frontend`) if you adjust npm dependencies.
+5. The `vectorstore` service provisions a ChromaDB instance and keeps data in the `chroma_data` named volume. Remove containers and volumes with `docker compose down -v` when you want a clean slate.
+
+### Docker Environment Notes
+- The CRA dev server reads the `proxy` setting in `client/package.json` so that `/api` requests reach the Flask backend (`backend:5000`) inside Docker. From the host machine you can reach the API at `http://localhost:5500`.
+- Update the port bindings in `docker-compose.yml` if port `3000` is already in use on your machine.
+- Swap in a production-ready WSGI server (for example, Gunicorn or Uvicorn) before deploying beyond development.
