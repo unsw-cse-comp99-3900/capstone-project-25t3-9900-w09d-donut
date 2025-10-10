@@ -1,0 +1,28 @@
+name: Deploy to EC2 via SSH
+
+on:
+  push:
+    branches: [ "main" ]   
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for version stamping only)
+        uses: actions/checkout@v4
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            set -e
+            APP_DIR="${{ secrets.APP_DIR || '/home/ubuntu/capstone-project-25t3-9900-w09d-donut' }}"
+            cd "$APP_DIR"
+            git fetch --all
+            git reset --hard origin/main
+            docker compose pull || true
+            docker compose build
+            docker compose up -d
+            docker compose ps
