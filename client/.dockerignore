@@ -1,3 +1,4 @@
 # Ignore local build artefacts
 node_modules
 dist
+build

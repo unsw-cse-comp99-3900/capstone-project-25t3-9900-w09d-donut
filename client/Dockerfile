@@ -3,14 +3,18 @@ FROM node:20-alpine AS base
 
 WORKDIR /app
 
-# Install dependencies first for better caching
-COPY package.json ./package.json
+# Install dependencies first for better caching layers
+COPY package.json package-lock.json ./
 RUN npm install
 
 # Copy application source
 COPY . .
 
-EXPOSE 5173
+# CRA dev server needs to listen on 0.0.0.0 for container access
+ENV HOST=0.0.0.0
+ENV PORT=3000
 
-# Start Vite dev server accessible from the host machine
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+EXPOSE 3000
+
+# Start the React development server
+CMD ["npm", "start"]
