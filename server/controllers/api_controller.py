@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from server.services.orchestration_service import OrchestrationService
+from server.services.academic_search import search_openalex_papers as academic_search
 
 api_blueprint = Blueprint("api", __name__)
 
@@ -43,3 +44,41 @@ def refine_draft(request_id: str):
     # TODO: Validate refinement message and delegate to refinement module
     orchestration_service.refine_draft(request_id, payload)
     return jsonify({"detail": "Refinement request accepted"}), 202
+
+@api_blueprint.post("/normal_search")
+def normal_search():
+    """
+    Invoke academic_search with payload:
+    {
+      "keywords": ["llm", "retrieval"],
+      "date_range": ["2023-01-01", "2024-12-31"] | {"start": "...", "end": "..."} | null,
+      "concepts": ["C123", "C456"] | null,
+      "limit": 50
+    }
+    """
+    payload = request.get_json(silent=True) or {}
+
+    keywords = payload.get("keywords") or []
+    # Normalize date_range to tuple[str, str] | None
+    date_range = payload.get("date_range")
+    if isinstance(date_range, dict):
+        start = date_range.get("start")
+        end = date_range.get("end")
+        date_range = (start, end) if start and end else None
+    elif isinstance(date_range, (list, tuple)) and len(date_range) >= 2:
+        date_range = (date_range[0], date_range[1])
+    else:
+        date_range = None
+
+    concepts = payload.get("concepts") or None
+    limit = payload.get("limit", 50)
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 50
+
+    try:
+        results = academic_search(keywords=keywords, date_range=date_range, concepts=concepts, limit=limit)
+        return jsonify({"results": results}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

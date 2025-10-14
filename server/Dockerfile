@@ -4,6 +4,7 @@ FROM python:3.11-slim AS base
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -25,6 +26,9 @@ ENV FLASK_APP=server.app \
     FLASK_RUN_PORT=5000
 
 EXPOSE 5000
+
+# Container healthcheck (Flask dev server)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD curl --fail http://localhost:5000/api/health || exit 1
 
 # Default command launches the Flask development server
 CMD ["flask", "--app", "server.app", "run", "--host", "0.0.0.0", "--port", "5000"]

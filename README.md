@@ -64,9 +64,95 @@
 - Use `storage/sqlite/database.py` as the single entry point for database connections (swap for SQLAlchemy as needed).
 - `storage/vector_store/chroma_client.py` centralizes Chroma connection logic so different agents can share a collection.
 
+## API Endpoints
+
+- Health check: `GET /api/health`
+- Create research request: `POST /api/requests`
+- Approve plan: `PATCH /api/requests/<id>/approval`
+- Get draft: `GET /api/requests/<id>/draft`
+- Refine draft: `POST /api/requests/<id>/refine`
+
+- Normal academic search: `POST /api/normal_search`
+  - Request body schema (JSON):
+    ```
+    {
+      "keywords": string[]              // required: keywords array for title+abstract search, e.g. ["large language model","transformer"]
+      "date_range": [string, string] |  // optional: start/end dates, format "YYYY-MM-DD"
+                    { "start": string, "end": string } |
+                    null
+      "concepts": string[] | null       // optional: OpenAlex concept IDs (e.g. ["C41008148"] for NLP); null = no filter
+      "limit": number                   // optional: number of results, default 50
+    }
+    ```
+  - Response body schema (200 OK):
+    ```
+    {
+      "results": [
+        {
+          "id": string,                 // OpenAlex work ID URL
+          "title": string,              // paper title
+          "authors": string[],          // list of author names
+          "summary": string,            // abstract text (may be empty or long)
+          "publication_date": string,   // publish date "YYYY-MM-DD" or year string
+          "source": string,             // journal/conference/source name (may be empty)
+          "cited_by_count": number,     // citation count
+          "link": string,               // same as id (OpenAlex page URL)
+          "pdf_url": string             // downloadable PDF URL (only results with PDFs are returned)
+        },
+        ...
+      ]
+    }
+    ```
+  - Example (PowerShell, recommended):
+    ```
+    $body = @{
+      keywords = @("large language model","transformer");
+      date_range = @("2024-01-01","2025-01-01");
+      concepts = @("C41008148");
+      limit = 30
+    } | ConvertTo-Json -Depth 5
+    Invoke-RestMethod -Method Post -Uri http://localhost:5500/api/normal_search -ContentType 'application/json' -Body $body
+    ```
+  - Example (curl.exe; use a variable for JSON to avoid quoting issues):
+    ```
+    $json = @'
+    {
+      "keywords": ["large language model", "transformer"],
+      "date_range": ["2024-01-01", "2025-01-01"],
+      "concepts": ["C41008148"],
+      "limit": 30
+    }
+    '@
+    curl.exe -s -X POST http://localhost:5500/api/normal_search -H "Content-Type: application/json" --data-binary $json
+    ```
+
 ## Testing
 - Pytest scaffold lives in `server/tests/`; extend coverage as endpoints and services gain implementations.
 - Add client-side tests (for example, Vitest and React Testing Library) once components host real logic.
+
+### Normal Search Integration Test (OpenAlex)
+This test hits the backend endpoint `/api/normal_search` using the exact parameters you provided and asserts response structure.
+
+- Test file: `server/tests/test_normal_search.py`
+- Payload:
+  ```
+  {
+    "keywords": ["large language model", "transformer"],
+    "date_range": ["2024-01-01", "2025-01-01"],
+    "concepts": ["C41008148"],
+    "limit": 30
+  }
+  ```
+- Run locally:
+  ```
+  pytest -q server/tests/test_normal_search.py
+  ```
+- Run inside Docker backend container (if needed):
+  ```
+  docker compose exec backend pytest -q server/tests/test_normal_search.py
+  ```
+Notes:
+- This is an integration test that reaches OpenAlex; ensure outbound internet is available. If rate-limited, re-run or consider marking the test as flaky.
 
 ## Development Workflow (GitHub)
 ```mermaid
