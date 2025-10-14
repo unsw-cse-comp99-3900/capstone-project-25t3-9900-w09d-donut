@@ -13,30 +13,39 @@ services:
       FLASK_ENV: development
     depends_on:
       - vectorstore
-    # Enable live code reload by mounting source directories if desired
     volumes:
       - ./server:/app/server
       - ./ai_agents:/app/ai_agents
       - ./storage:/app/storage
+    networks:
+      - app_network
 
   frontend:
     build:
-      context: ./client
-      dockerfile: Dockerfile
+      context: ../frontend
+      dockerfile: ../frontend/Dockerfile
+    volumes:
+      - ../frontend:/app
     ports:
       - "3000:3000"
     depends_on:
       - backend
+    networks:
+      - app_network
 
   vectorstore:
     image: chromadb/chroma:0.4.24
-    # Expose ChromaDB port for external tooling if required
     ports:
       - "8000:8000"
     volumes:
       - chroma_data:/chroma/.chromadb
+    networks:
+      - app_network
 
 volumes:
   chroma_data:
-    # Named volume stores vector database files
     driver: local
+
+networks:
+  app_network:
+    driver: bridge

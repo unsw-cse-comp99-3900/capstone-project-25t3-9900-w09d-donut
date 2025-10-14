@@ -1,6 +1,11 @@
 from . import create_app
+from flask_cors import CORS
+from . import create_app
 
 app = create_app()
+
+# ✅ 启用 CORS
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 
 if __name__ == "__main__":
