@@ -22,10 +22,10 @@ services:
 
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../frontend/Dockerfile
+      context: ../client
+      dockerfile: ../client/Dockerfile
     volumes:
-      - ../frontend:/app
+      - ../client:/app
     ports:
       - "3000:3000"
     depends_on:
