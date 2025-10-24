@@ -22,7 +22,7 @@ services:
 
   frontend:
     build:
-      context: ./client
+      context: ./
       dockerfile: ./client/Dockerfile
     volumes:
       - ./client:/app
