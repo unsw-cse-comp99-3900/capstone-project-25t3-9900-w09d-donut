@@ -25,6 +25,7 @@ jobs:
             git fetch --all
             git reset --hard origin/main
             docker compose pull || true
-            docker compose build
+            docker compose build --build-arg FRONTEND_CONTEXT=client
+            echo "✅ Building from client directory instead of frontend"
             docker compose up -d
             docker compose ps
