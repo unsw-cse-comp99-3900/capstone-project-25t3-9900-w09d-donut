@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   Box,
-  Tabs,
-  Tab,
   TextField,
   Typography,
   Button,
@@ -17,8 +15,6 @@ import {
   MenuItem,
   InputLabel,
   FormControl,
-  Chip,
-  Stack,
   Alert,
   Table,
   TableBody,
@@ -35,7 +31,7 @@ import { BrowserRouter as Router, Routes, Route, Link as RouterLink } from 'reac
 import AuthPage from './pages/AuthPage';
 
 const ResearchPlanner = () => {
-  const [tabIndex, setTabIndex] = useState(0);
+  // Removed unused tab index state
   const [text, setText] = useState('');
   const [researchTopic, setResearchTopic] = useState('');
   const [researchGoal, setResearchGoal] = useState('Broad Survey');
@@ -45,7 +41,7 @@ const ResearchPlanner = () => {
   const [loading, setLoading] = useState(false);
   const [pdfFiles, setPdfFiles] = useState([]);
   const [uploadStatus, setUploadStatus] = useState('');
-  const [keywords, setKeywords] = useState([]);
+  // Removed unused keywords state
   const [history, setHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
@@ -119,7 +115,7 @@ const ResearchPlanner = () => {
     setLoading(false);
     setPdfFiles([]);
     setUploadStatus('');
-    setKeywords([]);
+    // removed: reset of unused keywords state
     setResults([]);
     setError('');
     setShowHistory(false);
@@ -129,33 +125,7 @@ const ResearchPlanner = () => {
     setPdfFiles(e.target.files);
   };
 
-  const handleUpload = async () => {
-    if (pdfFiles.length === 0) {
-      setUploadStatus('Please select at least one PDF file.');
-      return;
-    }
-
-    const formData = new FormData();
-    for (let i = 0; i < pdfFiles.length; i++) {
-      formData.append('files', pdfFiles[i]);
-    }
-
-    setUploadStatus('Uploading...');
-    try {
-      const response = await fetch('http://127.0.0.1:5000/upload_pdf', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await response.json();
-      setUploadStatus('Uploaded successfully.');
-      if (data.keywords && data.keywords.length > 0) {
-        setKeywords(data.keywords);
-      }
-    } catch (uploadError) {
-      console.error(uploadError);
-      setUploadStatus('Upload failed.');
-    }
-  };
+  // Removed unused handleUpload function
 
   return (
     <Box sx={{ maxWidth: 900, mx: 'auto', mt: 4, px: 2 }}>
@@ -348,7 +318,7 @@ const ResearchPlanner = () => {
                               setTimeWindow(item.time);
                               setFocusType(item.focus);
                               setText(item.notes);
-                              setTabIndex(0);
+                              // removed: setTabIndex(0) as tab state was unused
                             }}
                             sx={{ ml: 1 }}
                             variant="outlined"
@@ -406,7 +376,7 @@ const ResearchPlanner = () => {
                     }}
                   >
                     <Typography variant="body2" sx={{ mb: 1 }}>
-                      <strong>AI:</strong> Hi! I'm here for high-level discussion. Ask me anything about your research plan!
+                      <strong>AI:</strong> Hi! I&apos;m here for high-level discussion. Ask me anything about your research plan!
                     </Typography>
                   </Box>
 
