@@ -13,6 +13,7 @@ services:
       FLASK_ENV: development
     depends_on:
       - vectorstore
+      - db
     volumes:
       - ./server:/app/server
       - ./ai_agents:/app/ai_agents
@@ -42,8 +43,23 @@ services:
     networks:
       - app_network
 
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-donut}
+      POSTGRES_USER: ${POSTGRES_USER:-donut}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-donut}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+
 volumes:
   chroma_data:
+    driver: local
+  pg_data:
     driver: local
 
 networks:
