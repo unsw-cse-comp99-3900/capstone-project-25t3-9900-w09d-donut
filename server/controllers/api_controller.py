@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from server.services.orchestration_service import OrchestrationService
 from server.services.academic_search import search_openalex_papers as academic_search
+from server.services.auth_service import register_user, login_user
 
 api_blueprint = Blueprint("api", __name__)
 
@@ -82,3 +83,33 @@ def normal_search():
         return jsonify({"results": results}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@api_blueprint.post("/auth/register")
+def register():
+    """注册新用户"""
+    data = request.get_json() or {}
+    username = data.get("username")
+    email = data.get("email")
+    password = data.get("password")
+
+    result, error = register_user(username, email, password)
+    if error:
+        code = 400 if error != "Email already registered" else 409
+        return jsonify({"error": error}), code
+
+    return jsonify({"message": "User registered", "user": result}), 201
+
+
+@api_blueprint.post("/auth/login")
+def login():
+    """用户登录"""
+    data = request.get_json() or {}
+    email = data.get("email")
+    password = data.get("password")
+
+    result, error = login_user(email, password)
+    if error:
+        code = 404 if error == "User not found" else 401
+        return jsonify({"error": error}), code
+
+    return jsonify(result), 200
