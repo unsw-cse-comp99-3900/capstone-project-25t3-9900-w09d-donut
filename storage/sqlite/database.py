@@ -19,3 +19,4 @@ def get_connection():
         yield connection
     finally:
         connection.close()
+        

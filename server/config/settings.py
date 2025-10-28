@@ -12,6 +12,8 @@ class BaseConfig:
     LLM_MODEL: str = "gemini-pro"
     ARXIV_API_URL: str = "https://export.arxiv.org/api/query"
     CORS_ORIGINS: str = "http://localhost:5173"
+    
+    JWT_EXPIRE_HOURS: int = 2
 
 
 @dataclass
