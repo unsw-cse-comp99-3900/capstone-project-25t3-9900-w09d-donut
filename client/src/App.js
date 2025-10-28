@@ -28,11 +28,13 @@ import {
   TableRow,
   Paper,
   CircularProgress,
-  Link,
+  Link as MuiLink,
 } from '@mui/material';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import { BrowserRouter as Router, Routes, Route, Link as RouterLink } from 'react-router-dom';
+import AuthPage from './pages/AuthPage';
 
-function App() {
+const ResearchPlanner = () => {
   const [tabIndex, setTabIndex] = useState(0);
   const [text, setText] = useState('');
   const [researchTopic, setResearchTopic] = useState('');
@@ -56,8 +58,6 @@ function App() {
     setHistory(savedHistory);
   }, []);
 
-  // Tab structure removed, so handleTabChange is not needed.
-
   const handleGeneratePlan = async () => {
     setLoading(true);
     setResult(null);
@@ -69,17 +69,16 @@ function App() {
         ? researchTopic.split(/[,，\s]+/).filter(Boolean)
         : [];
 
-      // Check for similar past searches for reuse suggestion
       const similarHistory = history.filter((item) =>
         researchTopic.toLowerCase().includes(item.topic.toLowerCase())
       );
       if (similarHistory.length > 0) {
-        console.log("⚡ Found similar past searches:", similarHistory);
+        console.log('⚡ Found similar past searches:', similarHistory);
       }
 
       const body = {
         keywords: keywordsArray,
-        date_range: ["2020-01-01", "2025-01-01"],
+        date_range: ['2020-01-01', '2025-01-01'],
         concepts: null,
         limit: resultLimit,
       };
@@ -102,7 +101,6 @@ function App() {
       const updatedHistory = [newResult, ...existingHistory].slice(0, 20);
       localStorage.setItem('searchHistory', JSON.stringify(updatedHistory));
       setHistory(updatedHistory);
-
     } catch (err) {
       console.error(err);
       setError('Failed to fetch search results. Please check backend connection.');
@@ -122,9 +120,9 @@ function App() {
     setPdfFiles([]);
     setUploadStatus('');
     setKeywords([]);
-    setResults([]); // 新增：清空搜索结果表格
-    setError('');   // 新增：清空错误提示
-    setShowHistory(false); // 新增：折叠历史记录
+    setResults([]);
+    setError('');
+    setShowHistory(false);
   };
 
   const handleFileChange = (e) => {
@@ -153,20 +151,24 @@ function App() {
       if (data.keywords && data.keywords.length > 0) {
         setKeywords(data.keywords);
       }
-    } catch (error) {
-      console.error(error);
+    } catch (uploadError) {
+      console.error(uploadError);
       setUploadStatus('Upload failed.');
     }
   };
 
   return (
     <Box sx={{ maxWidth: 900, mx: 'auto', mt: 4, px: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+        <Button component={RouterLink} to="/auth" variant="outlined">
+          Sign In / Sign Up
+        </Button>
+      </Box>
       <Card elevation={3}>
         <CardContent>
           <Typography variant="h5" gutterBottom fontWeight={600}>
             Research Plan Generator
           </Typography>
-          {/* Combined Input Section */}
           <Box sx={{ mb: 3 }}>
             <TextField
               label="Enter your research topic, keywords, or question"
@@ -238,7 +240,6 @@ function App() {
               </Grid>
 
               <Grid item xs={12} md={4}>
-                {/* Time Window as number input */}
                 <TextField
                   label="Time Window (years)"
                   type="number"
@@ -251,7 +252,6 @@ function App() {
                 />
               </Grid>
 
-              {/* Most Compatible Selector as number input */}
               <Grid item xs={12} md={4}>
                 <TextField
                   label="Most Compatible (number of papers)"
@@ -363,7 +363,6 @@ function App() {
             )}
           </Box>
 
-          {/* Show result count after Generate Plan, before showing result */}
           {results.length > 0 && (
             <Typography variant="subtitle1" sx={{ mt: 2, fontWeight: 500 }}>
               Showing top {results.length} results
@@ -389,7 +388,6 @@ function App() {
                 </CardContent>
               </Card>
 
-              {/* 💬 High-level Discussion placed here */}
               <Box sx={{ mt: 5 }}>
                 <Card variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="h6" gutterBottom>
@@ -459,17 +457,17 @@ function App() {
                       <TableCell>{row.authors?.join(', ') || '-'}</TableCell>
                       <TableCell>{row.publication_date || '-'}</TableCell>
                       <TableCell>
-                        <Link href={row.link} target="_blank" rel="noopener">
+                        <MuiLink href={row.link} target="_blank" rel="noopener">
                           {row.title}
-                        </Link>
+                        </MuiLink>
                       </TableCell>
                       <TableCell>{row.source || '-'}</TableCell>
                       <TableCell>{row.cited_by_count || 0}</TableCell>
                       <TableCell>
                         {row.pdf_url ? (
-                          <Link href={row.pdf_url} target="_blank" rel="noopener">
+                          <MuiLink href={row.pdf_url} target="_blank" rel="noopener">
                             <PictureAsPdfIcon color="error" />
-                          </Link>
+                          </MuiLink>
                         ) : (
                           '-'
                         )}
@@ -480,11 +478,19 @@ function App() {
               </Table>
             </TableContainer>
           )}
-
         </CardContent>
       </Card>
     </Box>
   );
-}
+};
+
+const App = () => (
+  <Router>
+    <Routes>
+      <Route path="/" element={<ResearchPlanner />} />
+      <Route path="/auth" element={<AuthPage />} />
+    </Routes>
+  </Router>
+);
 
 export default App;
