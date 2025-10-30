@@ -1,22 +1,54 @@
 // client/src/services/authApi.js
+
+const jsonRequest = async (url, options) => {
+  const response = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    data = {};
+  }
+
+  if (!response.ok) {
+    const message = data?.error || `Request failed with status ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.payload = data;
+    throw error;
+  }
+
+  return data;
+};
+
 export async function registerApi(payload) {
-  const res = await fetch("/api/auth/register", {
+  return jsonRequest("/api/auth/register", {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
     body: JSON.stringify(payload),
   });
-  return await res.json();
 }
 
 export async function loginApi(payload) {
-  const res = await fetch("/api/auth/login", {
+  const data = await jsonRequest("/api/auth/login", {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  if (res.ok && data.token) {
-    localStorage.setItem("token", data.token);
+
+  if (data.token) {
+    localStorage.setItem("authToken", data.token);
   }
+  if (data.email) {
+    localStorage.setItem("authEmail", data.email);
+  }
+
   return data;
+}
+
+export function logout() {
+  localStorage.removeItem("authToken");
+  localStorage.removeItem("authEmail");
+  localStorage.removeItem("authUsername");
 }

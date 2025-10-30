@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   Box,
-  Tabs,
-  Tab,
   TextField,
   Typography,
   Button,
@@ -17,7 +15,6 @@ import {
   MenuItem,
   InputLabel,
   FormControl,
-  Chip,
   Stack,
   Alert,
   Table,
@@ -33,9 +30,84 @@ import {
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import { BrowserRouter as Router, Routes, Route, Link as RouterLink } from 'react-router-dom';
 import AuthPage from './pages/AuthPage';
+import { logout as logoutAuth } from './services/authApi';
+
+const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/$/, '');
+const HISTORY_STORAGE_KEY = 'searchHistoryByUser';
+
+const readAuthSnapshot = () => {
+  const email = localStorage.getItem('authEmail');
+  if (!email) {
+    return null;
+  }
+  const username = localStorage.getItem('authUsername') || email;
+  return { email, username };
+};
+
+const resolveHistoryKey = (snapshot) => (snapshot?.email ? snapshot.email.toLowerCase() : 'guest');
+
+const readHistoryMap = () => {
+  try {
+    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err) {
+    console.warn('Failed to parse stored history', err);
+    return {};
+  }
+};
+
+const readLegacyHistory = () => {
+  try {
+    const raw = localStorage.getItem('searchHistory');
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn('Failed to parse legacy history', err);
+    return [];
+  }
+};
+
+const persistHistoryMap = (map) => {
+  localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(map));
+};
+
+const readHistoryForUser = (snapshot) => {
+  const key = resolveHistoryKey(snapshot);
+  const map = readHistoryMap();
+  if (map[key]) {
+    return map[key];
+  }
+
+  const legacy = readLegacyHistory();
+  if (legacy.length > 0) {
+    map[key] = legacy;
+    persistHistoryMap(map);
+    localStorage.removeItem('searchHistory');
+    return legacy;
+  }
+
+  return [];
+};
+
+const writeHistoryForUser = (snapshot, entries) => {
+  const key = resolveHistoryKey(snapshot);
+  const map = readHistoryMap();
+  if (!entries.length) {
+    delete map[key];
+  } else {
+    map[key] = entries;
+  }
+  persistHistoryMap(map);
+};
 
 const ResearchPlanner = () => {
-  const [tabIndex, setTabIndex] = useState(0);
   const [text, setText] = useState('');
   const [researchTopic, setResearchTopic] = useState('');
   const [researchGoal, setResearchGoal] = useState('Broad Survey');
@@ -52,11 +124,45 @@ const ResearchPlanner = () => {
   const [results, setResults] = useState([]);
   const [error, setError] = useState('');
   const [resultLimit, setResultLimit] = useState(30);
+  const [authUser, setAuthUser] = useState(() => readAuthSnapshot());
 
   useEffect(() => {
-    const savedHistory = JSON.parse(localStorage.getItem('searchHistory')) || [];
-    setHistory(savedHistory);
+    const handleAuthChange = () => {
+      setAuthUser(readAuthSnapshot());
+    };
+
+    const handleStorageChange = (event) => {
+      if (event.key === 'authEmail' || event.key === 'authUsername') {
+        handleAuthChange();
+      }
+      if (event.key === HISTORY_STORAGE_KEY) {
+        setHistory(readHistoryForUser(readAuthSnapshot()));
+      }
+    };
+
+    window.addEventListener('auth:changed', handleAuthChange);
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('auth:changed', handleAuthChange);
+      window.removeEventListener('storage', handleStorageChange);
+    };
   }, []);
+
+  useEffect(() => {
+    setHistory(readHistoryForUser(authUser));
+  }, [authUser]);
+
+  const handleLogout = () => {
+    logoutAuth();
+    setAuthUser(null);
+    setHistory(readHistoryForUser(null));
+    setResults([]);
+    setResult(null);
+    setError('');
+    setShowHistory(false);
+    window.dispatchEvent(new Event('auth:changed'));
+  };
 
   const handleGeneratePlan = async () => {
     setLoading(true);
@@ -83,7 +189,7 @@ const ResearchPlanner = () => {
         limit: resultLimit,
       };
 
-      const response = await axios.post('http://localhost:5000/api/normal_search', body);
+      const response = await axios.post(`${API_BASE_URL}/api/normal_search`, body);
       setResults(response.data.results || []);
 
       const topic = researchTopic.trim() || 'N/A';
@@ -96,10 +202,11 @@ const ResearchPlanner = () => {
         plan: `Research Topic: ${topic}\nGoal: ${goal}\nTime Limit: ${time}\nFocus: ${focus}${notes}\n\nSearch completed successfully.`,
       });
 
-      const newResult = { topic, goal, time, focus, notes, timestamp: new Date().toISOString() };
-      const existingHistory = JSON.parse(localStorage.getItem('searchHistory')) || [];
+  const newResult = { topic, goal, time, focus, notes, timestamp: new Date().toISOString() };
+  const snapshot = readAuthSnapshot() || authUser;
+  const existingHistory = readHistoryForUser(snapshot);
       const updatedHistory = [newResult, ...existingHistory].slice(0, 20);
-      localStorage.setItem('searchHistory', JSON.stringify(updatedHistory));
+      writeHistoryForUser(snapshot, updatedHistory);
       setHistory(updatedHistory);
     } catch (err) {
       console.error(err);
@@ -142,7 +249,7 @@ const ResearchPlanner = () => {
 
     setUploadStatus('Uploading...');
     try {
-      const response = await fetch('http://127.0.0.1:5000/upload_pdf', {
+      const response = await fetch(`${API_BASE_URL}/upload_pdf`, {
         method: 'POST',
         body: formData,
       });
@@ -160,9 +267,20 @@ const ResearchPlanner = () => {
   return (
     <Box sx={{ maxWidth: 900, mx: 'auto', mt: 4, px: 2 }}>
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-        <Button component={RouterLink} to="/auth" variant="outlined">
-          Sign In / Sign Up
-        </Button>
+        {authUser ? (
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Typography variant="body1" fontWeight={500}>
+              {authUser.username}
+            </Typography>
+            <Button variant="text" onClick={handleLogout}>
+              Log Out
+            </Button>
+          </Stack>
+        ) : (
+          <Button component={RouterLink} to="/auth" variant="outlined">
+            Sign In / Sign Up
+          </Button>
+        )}
       </Box>
       <Card elevation={3}>
         <CardContent>
@@ -348,7 +466,6 @@ const ResearchPlanner = () => {
                               setTimeWindow(item.time);
                               setFocusType(item.focus);
                               setText(item.notes);
-                              setTabIndex(0);
                             }}
                             sx={{ ml: 1 }}
                             variant="outlined"
@@ -406,7 +523,7 @@ const ResearchPlanner = () => {
                     }}
                   >
                     <Typography variant="body2" sx={{ mb: 1 }}>
-                      <strong>AI:</strong> Hi! I'm here for high-level discussion. Ask me anything about your research plan!
+                      <strong>AI:</strong> Hi! I&apos;m here for high-level discussion. Ask me anything about your research plan!
                     </Typography>
                   </Box>
 
