@@ -83,7 +83,7 @@ const ResearchPlanner = () => {
         limit: resultLimit,
       };
 
-      const response = await axios.post('http://localhost:5500/api/normal_search', body);
+      const response = await axios.post('http://localhost:5000/api/normal_search', body);
       setResults(response.data.results || []);
 
       const topic = researchTopic.trim() || 'N/A';
