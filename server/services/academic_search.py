@@ -141,3 +141,26 @@ class AcademicSearchService:
 
     def list_user_history(self, user_id: int, limit: int = 20, offset: int = 0) -> List[dict]:
         return self.history_repository.list_by_user(user_id, limit=limit, offset=offset)
+
+    def search_and_append(
+        self,
+        history_id: int,
+        *,
+        keywords: Sequence[str],
+        date_range: Optional[Tuple[str, str]] = None,
+        concepts: Optional[Sequence[str]] = None,
+        limit: int = 5,
+    ) -> List[dict]:
+        results = search_openalex_papers(
+            list(keywords),
+            date_range=date_range,
+            concepts=list(concepts) if concepts else None,
+            limit=limit,
+        )
+        if not results:
+            return []
+
+        self.paper_repository.upsert_many(results)
+        appended_ids = self.history_repository.append_papers(history_id, results, selected=True)
+        appended_set = set(appended_ids)
+        return [item for item in results if (item.get("id") or item.get("paper_id")) in appended_set]

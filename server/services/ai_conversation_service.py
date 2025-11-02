@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Mapping
 
 from ai_agents.services.conversation_agent import ConversationAgent
+from ai_agents.services.tooling import AgentTool
 from ai_agents.services.models import AgentReply, ConversationSession, PaperSummary, UploadedFileInfo
 from server.data_access.paper_repository import PaperRepository
 from server.data_access.search_history_repository import SearchHistoryRepository
@@ -22,21 +23,41 @@ class AIConversationService:
         self._agent = agent or ConversationAgent()
         self._paper_repository = paper_repository
         self._history_repository = history_repository
+        self._session_history: Dict[str, int] = {}
 
     def ingest_papers(self, papers: Iterable[PaperSummary]) -> None:
         self._agent.ingest_papers(papers)
 
-    def start_session(self, session_id: str, initial_selection: Optional[Iterable[str]] = None) -> ConversationSession:
-        return self._agent.start_session(session_id, initial_selection)
+    def start_session(
+        self,
+        session_id: str,
+        initial_selection: Optional[Iterable[str]] = None,
+        metadata: Optional[Mapping[str, object]] = None,
+    ) -> ConversationSession:
+        session = self._agent.start_session(session_id, initial_selection, metadata=metadata)
+        if metadata and "history_id" in metadata:
+            try:
+                self._session_history[session_id] = int(metadata["history_id"])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                pass
+        return session
 
     def register_uploads(self, session_id: str, files: Sequence[UploadedFileInfo]) -> None:
         self._agent.register_uploads(session_id, files)
 
-    def handle_message(self, session_id: str, message: str) -> AgentReply:
+    def handle_message(self, session_id: str, message: str, *, history_id: Optional[int] = None) -> AgentReply:
+        if history_id is not None:
+            self._session_history[session_id] = history_id
+            self._agent.set_session_context(session_id, history_id=history_id)
+        elif session_id in self._session_history:
+            self._agent.set_session_context(session_id, history_id=self._session_history[session_id])
         return self._agent.handle_message(session_id, message)
 
     def available_tools(self) -> List[str]:
         return self._agent.available_tools()
+
+    def register_tool(self, tool: AgentTool) -> None:
+        self._agent.register_tool(tool)
 
     def load_history_into_session(self, history_id: int, session_id: Optional[str] = None) -> Optional[ConversationSession]:
         if not self._history_repository:
@@ -69,7 +90,9 @@ class AIConversationService:
             self._agent.ingest_papers(paper_summaries)
 
         resolved_session_id = session_id or record.get("session_id") or f"history-{history_id}"
-        return self._agent.start_session(resolved_session_id, initial_selection=selected_ids)
+        self._agent.set_session_context(resolved_session_id, history_id=history_id)
+        self._session_history[resolved_session_id] = history_id
+        return self._agent.start_session(resolved_session_id, initial_selection=selected_ids, metadata={"history_id": history_id})
 
     def persist_session_selection(self, history_id: int, session_id: str) -> None:
         if not self._history_repository:
@@ -93,4 +116,6 @@ class AIConversationService:
             if not session:
                 raise KeyError(f"Unable to load session '{session_id}'")
             return session
+        self._session_history.setdefault(session_id, history_id)
+        self._agent.set_session_context(session_id, history_id=self._session_history[session_id])
         return self._agent.get_session(session_id)

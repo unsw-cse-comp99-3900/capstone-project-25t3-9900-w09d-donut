@@ -33,7 +33,7 @@ class SummarizeRequest:
     max_abstract_chars: int = 1200
     temperature: float = 0.4
     max_output_tokens: int = 1024
-    mode: str = "quick"  # quick | global | focused
+    mode: str = "quick"  # quick | global | focused | comprehensive
     focus_aspect: Optional[str] = None
     language: str = "en"
     system_prompt: Optional[str] = None
@@ -168,6 +168,7 @@ class PaperSummarizer:
             "quick": "Provide a high-level synthesis that highlights the most relevant insights.",
             "global": "Provide an academic-style synthesis covering background, methods, findings, and gaps.",
             "focused": "Provide a comparative analysis focused on the requested aspect.",
+            "comprehensive": "Provide a detailed, structured summary covering context, methodology, experiments, key findings, limitations, and future work.",
         }.get(req.mode, "Provide a high-level synthesis.")
 
         items: List[str] = []
@@ -271,7 +272,7 @@ class GlobalSummaryTool(AgentTool):
             style=str(payload.get("style") or "paragraph"),
             include_citations=True,
             max_items=int(payload.get("max_items", 12)),
-            mode="global",
+            mode=str(payload.get("mode") or "comprehensive"),
             language=str(payload.get("language") or "en"),
             system_prompt=payload.get("system_prompt"),
             conversation_summary=payload.get("conversation_summary"),

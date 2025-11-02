@@ -198,3 +198,52 @@ class SearchHistoryRepository:
                 (note, history_id, paper_id),
             )
             conn.commit()
+
+    def append_papers(self, history_id: int, papers: Sequence[Dict], selected: bool = True) -> List[str]:
+        if not papers:
+            return []
+
+        new_ids: List[str] = []
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT paper_id FROM search_history_items WHERE search_id = ?",
+                (history_id,),
+            )
+            existing_ids = {row[0] for row in cur.fetchall()}
+
+            cur.execute(
+                "SELECT COALESCE(MAX(rank), 0) FROM search_history_items WHERE search_id = ?",
+                (history_id,),
+            )
+            start_rank_row = cur.fetchone()
+            start_rank = start_rank_row[0] if start_rank_row and start_rank_row[0] is not None else 0
+
+            rows: List[tuple] = []
+            next_rank = start_rank
+            for payload in papers:
+                paper_id = payload.get("id") or payload.get("paper_id")
+                if not paper_id:
+                    continue
+                if paper_id in existing_ids:
+                    continue
+                next_rank += 1
+                existing_ids.add(paper_id)
+                new_ids.append(paper_id)
+                rows.append((history_id, paper_id, next_rank, 1 if selected else 0, None))
+
+            if rows:
+                cur.executemany(
+                    """
+                    INSERT INTO search_history_items (search_id, paper_id, rank, selected, note)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                cur.execute(
+                    "UPDATE search_history SET result_count = result_count + ? WHERE id = ?",
+                    (len(rows), history_id),
+                )
+            conn.commit()
+
+        return new_ids

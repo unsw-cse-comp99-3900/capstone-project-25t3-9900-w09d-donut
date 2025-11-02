@@ -8,13 +8,16 @@ from .conversation_repository import (
     ConversationRepository,
     ensure_conversation_tables,
 )
+from .summary_repository import SummaryRepository, ensure_summary_tables
 
 __all__ = [
     "ResearchRepository",
     "PaperRepository",
     "SearchHistoryRepository",
     "ConversationRepository",
+    "SummaryRepository",
     "ensure_papers_table",
     "ensure_search_history_tables",
     "ensure_conversation_tables",
+    "ensure_summary_tables",
 ]

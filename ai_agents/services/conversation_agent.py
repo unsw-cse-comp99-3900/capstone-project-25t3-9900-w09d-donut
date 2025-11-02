@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Protocol, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Any
 
 from .focused_synthesis import FocusedSynthesisTool
 from .models import (
@@ -16,7 +16,7 @@ from .query_refiner import KeywordExpansionTool
 from .search_list_manager import SearchListManager
 from .session_memory import SessionMemory
 from .summarizer import GlobalSummaryTool, QuickSummaryTool
-from .tooling import ToolContext, ToolExecutionError, ToolRegistry, ToolResult
+from .tooling import AgentTool, ToolContext, ToolExecutionError, ToolRegistry, ToolResult
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +58,22 @@ class NaturalLanguageInterpreter:
         r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b",
         re.IGNORECASE,
     )
+    WORD_LIMIT_PATTERN = re.compile(
+        r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:more|additional)\b",
+        re.IGNORECASE,
+    )
+    NUMBER_WORDS = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
     ORDINAL_MAP = {
         "first": 1,
         "second": 2,
@@ -115,6 +131,13 @@ class NaturalLanguageInterpreter:
             if targets:
                 return ParsedIntent(action="remove_specific", target_ids=targets)
 
+        if self._is_search_extension_request(lower):
+            keywords = self._extract_search_terms(message)
+            if not keywords:
+                keywords = session.filters.get("keywords", [])
+            limit = self._extract_limit(lower)
+            return ParsedIntent(action="extend_search", keywords=keywords, limit=limit)
+
         if "list" in lower or ("show" in lower and "selection" in lower):
             return ParsedIntent(action="list_selection")
 
@@ -152,6 +175,12 @@ class NaturalLanguageInterpreter:
         match = re.search(r"(?:top|first|limit)\s+(\d+)", text)
         if match:
             return int(match.group(1))
+        match_more = re.search(r"\b(\d+)\s+(?:more|additional)\b", text)
+        if match_more:
+            return int(match_more.group(1))
+        match_word = self.WORD_LIMIT_PATTERN.search(text)
+        if match_word:
+            return self.NUMBER_WORDS.get(match_word.group(1).lower())
         return None
 
     def _extract_keyword_candidates(self, text: str) -> List[str]:
@@ -178,6 +207,29 @@ class NaturalLanguageInterpreter:
         if match:
             return match.group(1).strip()
         return None
+
+    def _extract_search_terms(self, message: str) -> List[str]:
+        # Try explicit keyword cues first
+        keywords = self._extract_keyword_candidates(message)
+        if keywords:
+            return keywords
+
+        # Look for "about/on/regarding" phrases
+        about_match = re.search(
+            r"(?:about|on|regarding|around)\s+([a-zA-Z0-9,\-\s]+)",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if about_match:
+            fragment = about_match.group(1)
+            fragment = re.split(r"[.?!]", fragment)[0]
+            return self._normalize_terms([fragment])
+        return []
+
+    def _is_search_extension_request(self, text: str) -> bool:
+        if not any(token in text for token in ["search", "find", "look for", "discover"]):
+            return False
+        return any(term in text for term in ["more", "additional", "another", "extra"])
 
     def _resolve_targets(self, message: str, session: ConversationSession) -> List[str]:
         ids = set(self.ID_PATTERN.findall(message))
@@ -246,6 +298,7 @@ class ConversationAgent:
         self._search_manager = search_manager or SearchListManager()
         self._sessions: Dict[str, ConversationSession] = {}
         self._memory: Dict[str, SessionMemory] = {}
+        self._session_context: Dict[str, Dict[str, object]] = {}
         self._system_prompt = (
             "You are an academic research assistant. Manage search results, help refine keywords, "
             "add or remove papers, provide citations, summaries, comparisons, and insights. "
@@ -257,11 +310,18 @@ class ConversationAgent:
     def ingest_papers(self, papers: Iterable[PaperSummary]) -> None:
         self._search_manager.register(papers)
 
-    def start_session(self, session_id: str, initial_selection: Optional[Iterable[str]] = None) -> ConversationSession:
+    def start_session(
+        self,
+        session_id: str,
+        initial_selection: Optional[Iterable[str]] = None,
+        metadata: Optional[Mapping[str, object]] = None,
+    ) -> ConversationSession:
         selection = list(dict.fromkeys(initial_selection or []))
         session = ConversationSession(session_id=session_id, selected_ids=selection)
         self._sessions[session_id] = session
         self._memory[session_id] = SessionMemory(session=session)
+        if metadata:
+            self._session_context[session_id] = dict(metadata)
         return session
 
     def get_session(self, session_id: str) -> ConversationSession:
@@ -272,6 +332,10 @@ class ConversationAgent:
     def register_uploads(self, session_id: str, files: Sequence[UploadedFileInfo]) -> None:
         session = self.get_session(session_id)
         session.record_uploads(files)
+
+    def set_session_context(self, session_id: str, **metadata: object) -> None:
+        context = self._session_context.setdefault(session_id, {})
+        context.update(metadata)
 
     # ----------------------------- core handler --------------------------- #
 
@@ -322,6 +386,8 @@ class ConversationAgent:
             return self._handle_remove_specific(session, parsed.target_ids)
         if parsed.action == "add_specific":
             return self._handle_add_specific(session, parsed.target_ids)
+        if parsed.action == "extend_search":
+            return self._handle_search_extension(session, memory, parsed)
         if parsed.action == "list_selection":
             return self._handle_list(session)
         if parsed.action == "question":
@@ -414,6 +480,7 @@ class ConversationAgent:
             "papers": papers,
             "user_goal": "Produce a scientific synthesis covering methods, findings, and gaps.",
             "language": parsed.language,
+            "mode": "comprehensive",
         }
         result = self._run_tool(session, memory, "global_summary", payload)
         if result.metadata.get("error"):
@@ -424,11 +491,13 @@ class ConversationAgent:
                 metadata=result.metadata,
             )
         memory.store_artifact("last_global_summary", result.text)
+        metadata = dict(result.metadata)
+        metadata.setdefault("summary_type", "comprehensive")
         return AgentReply(
             text=result.text,
             selected_ids=list(session.selected_ids),
             citations=list(result.citations),
-            metadata=result.metadata,
+            metadata=metadata,
         )
 
     def _handle_focused_summary(self, session: ConversationSession, memory: SessionMemory, parsed: ParsedIntent) -> AgentReply:
@@ -453,11 +522,14 @@ class ConversationAgent:
             )
         artifact_key = f"focused_summary::{parsed.focus_aspect}"
         memory.store_artifact(artifact_key, result.text)
+        metadata = dict(result.metadata)
+        metadata.setdefault("summary_type", "focused")
+        metadata.setdefault("focus_aspect", parsed.focus_aspect)
         return AgentReply(
             text=result.text,
             selected_ids=list(session.selected_ids),
             citations=list(result.citations),
-            metadata=result.metadata,
+            metadata=metadata,
         )
 
     def _handle_filter_year(self, session: ConversationSession, years: int) -> AgentReply:
@@ -493,6 +565,75 @@ class ConversationAgent:
         summary = self._summarize_selection(papers, prefix="Added the requested papers")
         return AgentReply(text=summary, selected_ids=list(session.selected_ids), citations=[paper.title for paper in papers])
 
+    def _handle_search_extension(self, session: ConversationSession, memory: SessionMemory, parsed: ParsedIntent) -> AgentReply:
+        keywords = parsed.keywords or session.filters.get("keywords", [])
+        if not keywords:
+            return AgentReply(
+                text="Please specify the keywords that should be used for the new search.",
+                selected_ids=list(session.selected_ids),
+                citations=[],
+            )
+
+        limit = parsed.limit or 3
+        session_meta = self._session_context.get(session.session_id, {})
+        history_id = session_meta.get("history_id")
+        if history_id is None:
+            return AgentReply(
+                text="I cannot run a new search because this conversation is not linked to a stored history.",
+                selected_ids=list(session.selected_ids),
+                citations=[],
+            )
+
+        existing_ids = [paper.paper_id for paper in self._search_manager.list_catalogue()]
+        payload = {
+            "keywords": keywords,
+            "limit": limit,
+            "history_id": history_id,
+            "existing_ids": existing_ids,
+            "selected_ids": list(session.selected_ids),
+            "system_prompt": self._system_prompt,
+            "conversation_summary": memory.conversation_summary,
+        }
+        if "search_extension" not in self.available_tools():
+            return AgentReply(
+                text="Search extension is not available in the current configuration.",
+                selected_ids=list(session.selected_ids),
+                citations=[],
+            )
+        result = self._run_tool(session, memory, "search_extension", payload)
+        if result.metadata.get("error"):
+            return AgentReply(
+                text=f"Search extension failed: {result.metadata.get('error')}",
+                selected_ids=list(session.selected_ids),
+                citations=[],
+                metadata=result.metadata,
+            )
+
+        raw_items = result.metadata.get("papers") or []
+        new_summaries: List[PaperSummary] = []
+        for item in raw_items:
+            paper = self._coerce_external_paper(item)
+            if paper:
+                new_summaries.append(paper)
+
+        added_ids = [paper.paper_id for paper in new_summaries]
+        if new_summaries:
+            self._search_manager.register(new_summaries)
+            self._search_manager.add_to_selection(session, added_ids)
+            memory.upsert_filter("keywords", keywords)
+            message_text = result.text or f"Added {len(new_summaries)} new paper(s) to the selection."
+        else:
+            message_text = result.text or "No additional papers were found for that request."
+
+        metadata = dict(result.metadata)
+        metadata.setdefault("added_ids", added_ids)
+        return AgentReply(
+            text=message_text,
+            selected_ids=list(session.selected_ids),
+            citations=[],
+            metadata=metadata,
+        )
+
     def _handle_list(self, session: ConversationSession) -> AgentReply:
         papers = self._search_manager.bulk_get(session.selected_ids)
         summary = self._summarize_selection(papers, prefix="Current selection")
@@ -527,10 +668,14 @@ class ConversationAgent:
     # ----------------------------- helpers -------------------------------- #
 
     def _run_tool(self, session: ConversationSession, memory: SessionMemory, tool_name: str, payload: Dict[str, object]) -> ToolResult:
+        extras: Dict[str, object] = {"selected_ids": list(session.selected_ids)}
+        session_meta = self._session_context.get(session.session_id)
+        if session_meta:
+            extras.update(session_meta)
         context = ToolContext(
             session_id=session.session_id,
             memory_snapshot=memory.snapshot(),
-            extras={"selected_ids": list(session.selected_ids)},
+            extras=extras,
         )
         payload.setdefault("system_prompt", self._system_prompt)
         payload.setdefault("conversation_summary", memory.conversation_summary)
@@ -553,6 +698,32 @@ class ConversationAgent:
             lines.append(f"{index}. {paper.title}{year_part}")
         return "\n".join(lines)
 
+    def _coerce_external_paper(self, item: Mapping[str, Any]) -> Optional[PaperSummary]:
+        paper_id = str(item.get("id") or item.get("paper_id") or "").strip()
+        if not paper_id:
+            return None
+        title = str(item.get("title") or item.get("display_name") or "").strip()
+        abstract = str(item.get("summary") or item.get("abstract") or item.get("abstract_text") or "")
+        authors_raw = item.get("authors") or item.get("author_names") or []
+        if isinstance(authors_raw, str):
+            authors = tuple(part.strip() for part in authors_raw.split(",") if part.strip())
+        else:
+            authors = tuple(str(author).strip() for author in authors_raw if author)
+        year = item.get("publication_year")
+        try:
+            year_val = int(year) if year is not None else None
+        except (TypeError, ValueError):
+            year_val = None
+        url = str(item.get("link") or item.get("url") or paper_id)
+        return PaperSummary(
+            paper_id=paper_id,
+            title=title,
+            abstract=abstract,
+            authors=authors,
+            year=year_val,
+            url=url,
+        )
+
     def _build_default_registry(self) -> ToolRegistry:
         registry = ToolRegistry()
         registry.register(KeywordExpansionTool())
@@ -563,3 +734,6 @@ class ConversationAgent:
 
     def available_tools(self) -> List[str]:
         return list(self._tool_registry.available_tools().keys())
+
+    def register_tool(self, tool: AgentTool) -> None:
+        self._tool_registry.register(tool)

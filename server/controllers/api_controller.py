@@ -1,15 +1,19 @@
 import uuid
+from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file, url_for
 
 from server.data_access.user_repository import ensure_users_table, find_user_by_email
 from server.data_access.paper_repository import PaperRepository
 from server.data_access.search_history_repository import SearchHistoryRepository
 from server.data_access.conversation_repository import ConversationRepository
+from server.data_access.summary_repository import SummaryRepository
 from server.services.academic_search import AcademicSearchService, search_openalex_papers
 from server.services.ai_conversation_service import AIConversationService
 from server.services.orchestration_service import OrchestrationService
 from server.services.auth_service import register_user, login_user
+from ai_agents.services.pdf_builder import SummaryPdfBuilder
+from server.services.search_extension_tool import SearchExtensionTool
 
 api_blueprint = Blueprint("api", __name__)
 
@@ -25,7 +29,10 @@ conversation_service = AIConversationService(
     paper_repository=paper_repository,
     history_repository=search_history_repository,
 )
+conversation_service.register_tool(SearchExtensionTool(academic_search_service))
 conversation_repository = ConversationRepository()
+summary_repository = SummaryRepository()
+summary_pdf_builder = SummaryPdfBuilder()
 
 
 def _resolve_user_id(payload: dict | None = None) -> int | None:
@@ -331,7 +338,7 @@ def post_chat_message(session_id: str):
         return jsonify({"error": "Unable to initialize session"}), 500
 
     try:
-        reply = conversation_service.handle_message(session_id, message.strip())
+        reply = conversation_service.handle_message(session_id, message.strip(), history_id=history_id)
     except Exception as exc:  # pragma: no cover - defensive
         return jsonify({"error": str(exc)}), 500
 
@@ -359,6 +366,33 @@ def post_chat_message(session_id: str):
     )
     conversation_service.persist_session_selection(history_id, session_id)
 
+    summary_id = None
+    pdf_url = None
+    summary_type = (reply.metadata or {}).get("summary_type") if reply.metadata else None
+    if summary_type:
+        focus_aspect = (reply.metadata or {}).get("focus_aspect")
+        pdf_path = summary_pdf_builder.build_pdf(
+            summary_text=reply.text,
+            citations=reply.citations,
+            session_id=session_id,
+            summary_type=summary_type,
+            focus_aspect=focus_aspect,
+        )
+        summary_id = summary_repository.create_summary(
+            history_id=history_id,
+            session_id=session_id,
+            summary_type=summary_type,
+            focus_aspect=focus_aspect,
+            summary_text=reply.text,
+            pdf_path=str(pdf_path),
+        )
+        pdf_url = url_for(
+            "api.download_summary_pdf",
+            session_id=session_id,
+            summary_id=summary_id,
+            _external=True,
+        )
+
     messages = conversation_repository.list_messages(session_id)
     return jsonify(
         {
@@ -369,8 +403,53 @@ def post_chat_message(session_id: str):
             "selected_ids": reply.selected_ids,
             "metadata": reply.metadata,
             "messages": messages,
+            "summary_id": summary_id,
+            "pdf_url": pdf_url,
         }
     ), 200
+
+
+@api_blueprint.get("/chat/sessions/<session_id>/summaries")
+def list_session_summaries(session_id: str):
+    user_id = _resolve_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    session_record = conversation_repository.get_session(session_id)
+    if not session_record or session_record.get("user_id") not in (None, user_id):
+        return jsonify({"error": "Session not found"}), 404
+
+    summaries = summary_repository.list_by_session(session_id)
+    for item in summaries:
+        item["pdf_url"] = url_for(
+            "api.download_summary_pdf",
+            session_id=session_id,
+            summary_id=item["id"],
+            _external=True,
+        )
+    return jsonify({"summaries": summaries}), 200
+
+
+@api_blueprint.get("/chat/sessions/<session_id>/summaries/<int:summary_id>/download")
+def download_summary_pdf(session_id: str, summary_id: int):
+    user_id = _resolve_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    session_record = conversation_repository.get_session(session_id)
+    if not session_record or session_record.get("user_id") not in (None, user_id):
+        return jsonify({"error": "Session not found"}), 404
+
+    summary_record = summary_repository.get_summary(summary_id)
+    if not summary_record or summary_record["session_id"] != session_id:
+        return jsonify({"error": "Summary not found"}), 404
+
+    pdf_path = Path(summary_record["pdf_path"])
+    if not pdf_path.exists():
+        return jsonify({"error": "Summary PDF is not available"}), 404
+
+    download_name = pdf_path.name
+    return send_file(pdf_path, as_attachment=True, download_name=download_name)
 
 @api_blueprint.post("/auth/register")
 def register():

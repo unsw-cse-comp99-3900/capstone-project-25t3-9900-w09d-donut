@@ -62,6 +62,29 @@ class FakeFocusedSynthesisTool:
         )
 
 
+class FakeSearchExtensionTool:
+    name = "search_extension"
+
+    def execute(self, context: ToolContext, payload) -> ToolResult:
+        return ToolResult(
+            text="Retrieved 1 additional paper and updated the selection.",
+            citations=[],
+            selected_ids=payload.get("selected_ids") or [],
+            metadata={
+                "papers": [
+                    {
+                        "id": "P2",
+                        "title": "Evaluation Benchmarks",
+                        "summary": "Detailed exploration of evaluation strategies.",
+                        "authors": ["Dana"],
+                        "publication_year": 2024,
+                        "link": "https://example.org/p2",
+                    }
+                ]
+            },
+        )
+
+
 @pytest.fixture
 def sample_paper() -> PaperSummary:
     return PaperSummary(
@@ -143,3 +166,18 @@ def test_focus_summary_after_selection_changes(sample_paper: PaperSummary):
     assert payload["focus_aspect"].lower().startswith("the methodology")
     assert len(payload["papers"]) == 1
     assert payload["papers"][0].paper_id == "P1"
+
+
+def test_search_extension_adds_new_papers(sample_paper: PaperSummary):
+    registry = ToolRegistry()
+    registry.register(FakeSearchExtensionTool())
+
+    agent = ConversationAgent(tool_registry=registry)
+    agent.ingest_papers([sample_paper])
+    session = agent.start_session("session-search", initial_selection=["P1"], metadata={"history_id": 42})
+
+    reply = agent.handle_message("session-search", "Please search for two more papers about evaluation.")
+
+    assert "Retrieved" in reply.text
+    assert session.selected_ids == ["P1", "P2"]
+    assert reply.metadata.get("added_ids") == ["P2"]

@@ -1,5 +1,8 @@
 import json
+import os
+
 import pytest
+
 from server import create_app
 
 @pytest.fixture(scope="module")
@@ -9,6 +12,10 @@ def client():
     with app.test_client() as c:
         yield c
 
+@pytest.mark.skipif(
+    os.environ.get("ENABLE_ONLINE_OPENALEX") != "1",
+    reason="OpenAlex integration test requires external network; set ENABLE_ONLINE_OPENALEX=1 to enable.",
+)
 def test_normal_search_openalex_example(client):
     """
     Integration test against OpenAlex:
