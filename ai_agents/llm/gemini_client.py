@@ -22,7 +22,7 @@ _GEN_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gene
 _EMB_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
 
 # Default model names (stable + validated)
-_DEFAULT_TEXT_MODEL = "gemini-2.0-flash"
+_DEFAULT_TEXT_MODEL = "gemini-2.5-pro"
 _DEFAULT_EMB_MODEL = "text-embedding-004"
 
 

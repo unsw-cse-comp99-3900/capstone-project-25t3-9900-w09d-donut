@@ -12,19 +12,19 @@ from server.data_access.user_repository import (
 from server.config.settings import load_config
 
 
-# ✅ 读取配置（根据 settings.py）
+# Load configuration
 APP_ENV = os.getenv("APP_ENV", "development")
 CONFIG = load_config(APP_ENV)
 SECRET_KEY = CONFIG.get("SECRET_KEY", "change-me")
-JWT_EXPIRE_HOURS = int(CONFIG.get("JWT_EXPIRE_HOURS", 2))  # 默认 2 小时
+JWT_EXPIRE_HOURS = int(CONFIG.get("JWT_EXPIRE_HOURS", 2))  # default 2 hours
 
 
 def register_user(username: str, email: str, password: str):
     """
-    注册新用户
-    - 如果 users 表不存在则自动创建
-    - 检查重复邮箱
-    - 哈希密码并写入数据库
+    Register a new user.
+    - Ensure the users table exists.
+    - Validate uniqueness of the email.
+    - Hash the password and persist the record.
     """
     ensure_users_table()
 
@@ -42,9 +42,7 @@ def register_user(username: str, email: str, password: str):
 
 def login_user(email: str, password: str):
     """
-    用户登录
-    - 校验邮箱与密码
-    - 生成 JWT 令牌
+    Authenticate a user and return a JWT token on success.
     """
     ensure_users_table()
 

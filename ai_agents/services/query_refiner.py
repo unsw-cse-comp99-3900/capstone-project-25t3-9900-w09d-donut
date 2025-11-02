@@ -18,6 +18,8 @@ class RefineQueryRequest:
     domain: str = "ml"
     max_terms: int = 8
     language: str = "en"
+    conversation_notes: Optional[str] = None
+    system_prompt: Optional[str] = None
 
 
 @dataclass
@@ -72,7 +74,7 @@ class QueryRefiner:
         )
 
     def _build_prompt(self, req: RefineQueryRequest) -> str:
-        return f"""
+        base_prompt = """
 You are a research assistant. Curate and refine the following keywords for literature search.
 
 Input keywords: {req.keywords}
@@ -94,6 +96,12 @@ Constraints:
 - If no filter is appropriate, return an empty object.
 - Keep output deterministic and concise.
         """.strip()
+
+        system_note = f"System: {req.system_prompt.strip()}\n\n" if req.system_prompt else ""
+        conversation_note = ""
+        if req.conversation_notes:
+            conversation_note = f"Recent context: {req.conversation_notes.strip()}\n\n"
+        return f"{system_note}{conversation_note}{base_prompt}".strip()
 
 
 def _fallback_keywords(keywords: List[str]) -> List[str]:
@@ -124,6 +132,8 @@ class KeywordExpansionTool(AgentTool):
             domain=str(payload.get("domain") or "ml"),
             max_terms=int(payload.get("max_terms", 8)),
             language=str(payload.get("language") or "en"),
+            conversation_notes=context.memory_snapshot.generated_artifacts.get("conversation_summary"),
+            system_prompt=payload.get("system_prompt"),
         )
         result = self._refiner.refine(req)
 

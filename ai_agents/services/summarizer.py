@@ -36,6 +36,8 @@ class SummarizeRequest:
     mode: str = "quick"  # quick | global | focused
     focus_aspect: Optional[str] = None
     language: str = "en"
+    system_prompt: Optional[str] = None
+    conversation_summary: Optional[str] = None
 
 
 @dataclass
@@ -104,7 +106,7 @@ class PaperSummarizer:
         papers = [_coerce_paper(p) for p in req.papers][: max(1, req.max_items)]
         prompt, titles_for_cite, citations_map = self._build_prompt(papers, req)
 
-        cache_key = _hash_prompt(prompt + req.mode + req.style + (req.focus_aspect or ""))
+        cache_key = _hash_prompt(prompt + req.mode + req.style + (req.focus_aspect or "") + (req.system_prompt or ""))
         if self._enable_cache and cache_key in self._cache:
             cached = self._cache[cache_key]
             return SummarizeResult(
@@ -202,9 +204,14 @@ Instructions:
 - {cite_line}
 - {focus_line}
 
-Papers:
-{context}
 """
+        if req.system_prompt:
+            prompt = req.system_prompt.strip() + "\n\n" + prompt
+
+        if req.conversation_summary:
+            prompt += f"\nConversation context:\n{req.conversation_summary.strip()}\n"
+
+        prompt += "\nPapers:\n" + context + "\n"
         return prompt, titles_for_cite, citations_map
 
 
@@ -232,6 +239,8 @@ class QuickSummaryTool(AgentTool):
             mode="quick",
             focus_aspect=payload.get("focus_aspect"),
             language=str(payload.get("language") or "en"),
+            system_prompt=payload.get("system_prompt"),
+            conversation_summary=payload.get("conversation_summary"),
         )
         result = self.summarizer.summarize(req)
         return ToolResult(
@@ -264,6 +273,8 @@ class GlobalSummaryTool(AgentTool):
             max_items=int(payload.get("max_items", 12)),
             mode="global",
             language=str(payload.get("language") or "en"),
+            system_prompt=payload.get("system_prompt"),
+            conversation_summary=payload.get("conversation_summary"),
         )
         result = self.summarizer.summarize(req)
         return ToolResult(

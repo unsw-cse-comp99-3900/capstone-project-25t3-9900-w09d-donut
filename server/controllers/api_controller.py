@@ -374,7 +374,7 @@ def post_chat_message(session_id: str):
 
 @api_blueprint.post("/auth/register")
 def register():
-    """注册新用户"""
+    """Register a new user."""
     data = request.get_json() or {}
     username = data.get("username")
     email = data.get("email")
@@ -390,7 +390,7 @@ def register():
 
 @api_blueprint.post("/auth/login")
 def login():
-    """用户登录"""
+    """Authenticate a user and return a JWT token."""
     data = request.get_json() or {}
     email = data.get("email")
     password = data.get("password")
