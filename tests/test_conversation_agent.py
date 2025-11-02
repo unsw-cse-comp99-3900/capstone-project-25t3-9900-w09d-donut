@@ -44,6 +44,24 @@ class FakeQuickSummaryTool:
         )
 
 
+class FakeFocusedSynthesisTool:
+    name = "focused_synthesis"
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def execute(self, context: ToolContext, payload) -> ToolResult:
+        self.calls.append((context, payload))
+        aspect = payload.get("focus_aspect") or "unspecified focus"
+        selected_ids = payload.get("selected_ids") or []
+        return ToolResult(
+            text=f"Focused insight about {aspect}.",
+            citations=["Focused Paper"],
+            selected_ids=selected_ids,
+            metadata={"focus_aspect": aspect, "count": len(payload.get("papers", []))},
+        )
+
+
 @pytest.fixture
 def sample_paper() -> PaperSummary:
     return PaperSummary(
@@ -66,7 +84,7 @@ def test_keyword_expansion_updates_session_filters():
 
     reply = agent.handle_message("session-kw", "Please expand keyword LLM transformer.")
 
-    assert "核心词" in reply.text
+    assert "Core terms" in reply.text
     assert session.filters["keywords"] == ["llm", "transformer"]
     assert session.filters["search_filters"] == {"year_from": "2023"}
     assert keyword_tool.calls, "keyword expansion tool should be invoked"
@@ -91,3 +109,37 @@ def test_quick_summary_invokes_tool_with_selected_papers(sample_paper: PaperSumm
     papers_payload = summary_tool.last_payload["papers"]
     assert len(papers_payload) == 1
     assert papers_payload[0].paper_id == "P1"
+
+
+def test_focus_summary_after_selection_changes(sample_paper: PaperSummary):
+    second_paper = PaperSummary(
+        paper_id="P2",
+        title="Another Paper",
+        abstract="Explores focus testing.",
+        authors=["Carol"],
+        year=2023,
+        url="https://example.org/p2",
+    )
+
+    registry = ToolRegistry()
+    focus_tool = FakeFocusedSynthesisTool()
+    registry.register(focus_tool)
+
+    agent = ConversationAgent(tool_registry=registry)
+    agent.ingest_papers([sample_paper, second_paper])
+    session = agent.start_session("session-focus", initial_selection=["P1", "P2"])
+
+    remove_reply = agent.handle_message("session-focus", "Please remove paper P2 from the list.")
+    assert "Removed" in remove_reply.text
+    assert session.selected_ids == ["P1"], "Expected only first paper to remain selected"
+
+    focus_reply = agent.handle_message("session-focus", "Focus on the methodology of the remaining papers.")
+    assert "Focused insight" in focus_reply.text
+    assert focus_reply.citations == ["Focused Paper"]
+    assert session.selected_ids == ["P1"]
+
+    assert len(focus_tool.calls) == 1
+    _, payload = focus_tool.calls[0]
+    assert payload["focus_aspect"].lower().startswith("the methodology")
+    assert len(payload["papers"]) == 1
+    assert payload["papers"][0].paper_id == "P1"
