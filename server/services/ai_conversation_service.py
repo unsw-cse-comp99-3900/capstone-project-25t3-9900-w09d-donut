@@ -119,3 +119,31 @@ class AIConversationService:
         self._session_history.setdefault(session_id, history_id)
         self._agent.set_session_context(session_id, history_id=self._session_history[session_id])
         return self._agent.get_session(session_id)
+
+    def generate_summary(
+        self,
+        session_id: str,
+        *,
+        history_id: Optional[int] = None,
+        summary_type: str = "comprehensive",
+        focus_aspect: Optional[str] = None,
+        language: str = "en",
+    ) -> AgentReply:
+        if history_id is None:
+            history_id = self._session_history.get(session_id)
+        if history_id is None:
+            raise ValueError(f"history_id is required for session '{session_id}'")
+
+        session = self.ensure_session(history_id, session_id)
+        self._session_history[session_id] = history_id
+        self._agent.set_session_context(session_id, history_id=history_id)
+
+        reply = self._agent.generate_summary(
+            session.session_id,
+            summary_type=summary_type,
+            focus_aspect=focus_aspect,
+            language=language,
+        )
+        if self._history_repository:
+            self._history_repository.update_selection(history_id, session.selected_ids)
+        return reply

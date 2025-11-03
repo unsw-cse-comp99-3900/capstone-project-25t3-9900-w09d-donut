@@ -1,5 +1,6 @@
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from flask import Blueprint, jsonify, request, send_file, url_for
 
@@ -35,7 +36,10 @@ summary_repository = SummaryRepository()
 summary_pdf_builder = SummaryPdfBuilder()
 
 
-def _resolve_user_id(payload: dict | None = None) -> int | None:
+from typing import Optional
+
+
+def _resolve_user_id(payload: Optional[dict] = None) -> Optional[int]:
     payload = payload or {}
     email = (
         request.headers.get("X-User-Email")
@@ -106,7 +110,7 @@ def normal_search():
     payload = request.get_json(silent=True) or {}
 
     keywords = payload.get("keywords") or []
-    # Normalize date_range to tuple[str, str] | None
+    # Normalize date_range to Optional tuple[str, str]
     date_range = payload.get("date_range")
     if isinstance(date_range, dict):
         start = date_range.get("start")
@@ -450,6 +454,113 @@ def download_summary_pdf(session_id: str, summary_id: int):
 
     download_name = pdf_path.name
     return send_file(pdf_path, as_attachment=True, download_name=download_name)
+
+
+@api_blueprint.post("/summaries")
+def create_summary_via_api():
+    payload = request.get_json(silent=True) or {}
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        return jsonify({"error": "session_id is required"}), 400
+    session_id = session_id.strip()
+
+    summary_type = payload.get("summary_type", "comprehensive")
+    focus_aspect = payload.get("focus_aspect")
+    language = payload.get("language", "en")
+
+    user_id = _resolve_user_id(payload)
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    session_record = conversation_repository.get_session(session_id)
+    if not session_record or session_record.get("user_id") not in (None, user_id):
+        return jsonify({"error": "Session not found"}), 404
+
+    history_id = payload.get("history_id") or session_record.get("history_id")
+    if history_id is None:
+        return jsonify({"error": "history_id is required"}), 400
+
+    history_record = academic_search_service.load_history(int(history_id))
+    if not history_record or history_record.get("user_id") not in (None, user_id):
+        return jsonify({"error": "History not found"}), 404
+
+    if summary_type and str(summary_type).lower() in {"focused", "focus"} and not focus_aspect:
+        return jsonify({"error": "focus_aspect is required for focused summaries"}), 400
+
+    try:
+        reply = conversation_service.generate_summary(
+            session_id,
+            history_id=int(history_id),
+            summary_type=str(summary_type),
+            focus_aspect=focus_aspect,
+            language=str(language),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive
+        return jsonify({"error": str(exc)}), 500
+
+    conversation_repository.append_messages(
+        session_id,
+        [
+            {
+                "role": "assistant",
+                "content": reply.text,
+                "metadata": {
+                    "citations": reply.citations,
+                    "selected_ids": reply.selected_ids,
+                    "metadata": reply.metadata,
+                    "trigger": "summary_api",
+                },
+            }
+        ],
+    )
+    conversation_repository.upsert_session(
+        session_id,
+        history_id=int(history_id),
+        user_id=user_id,
+        selected_ids=reply.selected_ids or [],
+    )
+    conversation_service.persist_session_selection(int(history_id), session_id)
+
+    summary_id = None
+    pdf_url = None
+    summary_kind = (reply.metadata or {}).get("summary_type") if reply.metadata else None
+    if summary_kind:
+        focus_meta = (reply.metadata or {}).get("focus_aspect")
+        pdf_path = summary_pdf_builder.build_pdf(
+            summary_text=reply.text,
+            citations=reply.citations,
+            session_id=session_id,
+            summary_type=summary_kind,
+            focus_aspect=focus_meta,
+        )
+        summary_id = summary_repository.create_summary(
+            history_id=int(history_id),
+            session_id=session_id,
+            summary_type=summary_kind,
+            focus_aspect=focus_meta,
+            summary_text=reply.text,
+            pdf_path=str(pdf_path),
+        )
+        pdf_url = url_for(
+            "api.download_summary_pdf",
+            session_id=session_id,
+            summary_id=summary_id,
+            _external=True,
+        )
+
+    return jsonify(
+        {
+            "session_id": session_id,
+            "history_id": int(history_id),
+            "summary": reply.text,
+            "summary_id": summary_id,
+            "pdf_url": pdf_url,
+            "citations": reply.citations,
+            "metadata": reply.metadata,
+        }
+    ), 200
 
 @api_blueprint.post("/auth/register")
 def register():

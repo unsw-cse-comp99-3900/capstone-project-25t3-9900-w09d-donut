@@ -1,3 +1,5 @@
+from typing import Optional
+
 import pytest
 
 from ai_agents.services.conversation_agent import ConversationAgent, PaperSummary
@@ -29,7 +31,7 @@ class FakeQuickSummaryTool:
     name = "quick_summary"
 
     def __init__(self) -> None:
-        self.last_context: ToolContext | None = None
+        self.last_context: Optional[ToolContext] = None
         self.last_payload = None
 
     def execute(self, context: ToolContext, payload) -> ToolResult:
@@ -41,6 +43,22 @@ class FakeQuickSummaryTool:
             citations=["Test Paper"],
             selected_ids=selected_ids,
             metadata={"used_count": len(payload.get("papers", [])), "prompt_tokens": 128},
+        )
+
+
+class FakeGlobalSummaryTool:
+    name = "global_summary"
+
+    def __init__(self) -> None:
+        self.last_payload = None
+
+    def execute(self, context: ToolContext, payload) -> ToolResult:
+        self.last_payload = payload
+        return ToolResult(
+            text="Comprehensive synthesis covering methods, findings, and limitations.",
+            citations=["Paper Alpha", "Paper Beta"],
+            selected_ids=payload.get("selected_ids") or [],
+            metadata={"summary_type": "comprehensive"},
         )
 
 
@@ -168,6 +186,37 @@ def test_focus_summary_after_selection_changes(sample_paper: PaperSummary):
     assert payload["papers"][0].paper_id == "P1"
 
 
+def test_multi_step_conversation_flow_returns_expected_responses(sample_paper: PaperSummary):
+    second_paper = PaperSummary(
+        paper_id="P2",
+        title="Another Paper",
+        abstract="Focuses on retrieval augmented generation.",
+        authors=["Bob"],
+        year=2023,
+        url="https://example.org/p2",
+    )
+
+    registry = ToolRegistry()
+    registry.register(FakeKeywordExpansionTool())
+    registry.register(FakeQuickSummaryTool())
+    registry.register(FakeGlobalSummaryTool())
+    registry.register(FakeFocusedSynthesisTool())
+
+    agent = ConversationAgent(tool_registry=registry)
+    agent.ingest_papers([sample_paper, second_paper])
+    agent.start_session("session-workflow", initial_selection=["P1", "P2"])
+
+    reply1 = agent.handle_message("session-workflow", "Please expand keyword LLM transformer.")
+    reply2 = agent.handle_message("session-workflow", "Remove paper P2 from the list.")
+    reply3 = agent.handle_message("session-workflow", "Could you summarize these papers?")
+    reply4 = agent.handle_message("session-workflow", "Provide an overall summary of the selection.")
+    reply5 = agent.handle_message("session-workflow", "Focus on the methodology of the remaining papers.")
+
+    assert "Core terms" in reply1.text
+    assert "Removed requested papers" in reply2.text
+    assert reply3.text == "Here is the quick summary."
+    assert reply4.text.startswith("Comprehensive synthesis")
+    assert reply5.text.startswith("Focused insight about")
 def test_search_extension_adds_new_papers(sample_paper: PaperSummary):
     registry = ToolRegistry()
     registry.register(FakeSearchExtensionTool())

@@ -363,6 +363,45 @@ class ConversationAgent:
         memory.append_summary(f"User: {message.strip()} | Assistant: {reply.text.strip()}")
         return reply
 
+    def generate_summary(
+        self,
+        session_id: str,
+        *,
+        summary_type: str = "comprehensive",
+        focus_aspect: Optional[str] = None,
+        language: str = "en",
+    ) -> AgentReply:
+        session = self.get_session(session_id)
+        memory = self._memory[session_id]
+
+        summary_key = summary_type.lower().strip() if summary_type else "comprehensive"
+        if summary_key in {"quick", "short"}:
+            parsed = ParsedIntent(
+                action="quick_summary",
+                target_ids=list(session.selected_ids),
+                language=language,
+            )
+        elif summary_key in {"focused", "focus"}:
+            if not focus_aspect:
+                raise ValueError("focus_aspect is required for focused summaries")
+            parsed = ParsedIntent(
+                action="focused_summary",
+                target_ids=list(session.selected_ids),
+                focus_aspect=focus_aspect,
+                language=language,
+            )
+        else:
+            parsed = ParsedIntent(
+                action="global_summary",
+                target_ids=list(session.selected_ids),
+                language=language,
+            )
+
+        reply = self._dispatch_intent(session, memory, parsed)
+        memory.add_assistant_message(reply.text)
+        memory.append_summary(f"Assistant summary ({summary_key}): {reply.text.strip()}")
+        return reply
+
     # ----------------------------- action handlers ------------------------ #
 
     def _dispatch_intent(self, session: ConversationSession, memory: SessionMemory, parsed: ParsedIntent) -> AgentReply:

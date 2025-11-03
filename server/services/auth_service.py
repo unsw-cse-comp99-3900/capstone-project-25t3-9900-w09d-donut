@@ -35,7 +35,7 @@ def register_user(username: str, email: str, password: str):
     if existing:
         return None, "Email already registered"
 
-    hashed = generate_password_hash(password)
+    hashed = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
     user_id = create_user(username, email, hashed)
     return {"user_id": user_id, "email": email, "username": username}, None
 
