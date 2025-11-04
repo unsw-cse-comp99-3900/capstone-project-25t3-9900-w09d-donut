@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import {
   Box,
@@ -33,6 +33,11 @@ import AuthPage from './pages/AuthPage';
 import SummaryReviewPage from './pages/SummaryReviewPage';
 import { logout as logoutAuth } from './services/authApi';
 import { writeSummaryReviewSnapshot } from './services/summaryReviewState';
+import {
+  readResearchPlannerSnapshot,
+  writeResearchPlannerSnapshot,
+  clearResearchPlannerSnapshot,
+} from './services/researchPlannerState';
 
 const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/$/, '');
 const HISTORY_STORAGE_KEY = 'searchHistoryByUser';
@@ -111,25 +116,41 @@ const writeHistoryForUser = (snapshot, entries) => {
 
 const ResearchPlanner = () => {
   const navigate = useNavigate();
-  const [text, setText] = useState('');
-  const [researchTopic, setResearchTopic] = useState('');
-  const [researchGoal, setResearchGoal] = useState('Broad Survey');
-  const [timeWindow, setTimeWindow] = useState('Last 5 years');
-  const [focusType, setFocusType] = useState('Overview');
-  const [result, setResult] = useState(null);
+  const initialAuthSnapshot = useMemo(() => readAuthSnapshot(), []);
+  const persistedPlannerSnapshot = useMemo(() => {
+    const snapshot = readResearchPlannerSnapshot();
+    if (!snapshot) {
+      return null;
+    }
+    const currentEmail = initialAuthSnapshot?.email || null;
+    if (snapshot.userEmail && snapshot.userEmail !== currentEmail) {
+      return null;
+    }
+    return snapshot;
+  }, [initialAuthSnapshot]);
+  const [text, setText] = useState(() => persistedPlannerSnapshot?.text ?? '');
+  const [researchTopic, setResearchTopic] = useState(() => persistedPlannerSnapshot?.researchTopic ?? '');
+  const [researchGoal, setResearchGoal] = useState(() => persistedPlannerSnapshot?.researchGoal ?? 'Broad Survey');
+  const [timeWindow, setTimeWindow] = useState(() => persistedPlannerSnapshot?.timeWindow ?? 'Last 5 years');
+  const [focusType, setFocusType] = useState(() => persistedPlannerSnapshot?.focusType ?? 'Overview');
+  const [result, setResult] = useState(() => persistedPlannerSnapshot?.result ?? null);
   const [loading, setLoading] = useState(false);
   const [pdfFiles, setPdfFiles] = useState([]);
   const [uploadStatus, setUploadStatus] = useState('');
   // eslint-disable-next-line no-unused-vars
   const [keywords, setKeywords] = useState([]);
   const [history, setHistory] = useState([]);
-  const [showHistory, setShowHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(() => persistedPlannerSnapshot?.showHistory ?? false);
 
-  const [results, setResults] = useState([]);
-  const [historyId, setHistoryId] = useState(null);
+  const [results, setResults] = useState(() => persistedPlannerSnapshot?.results ?? []);
+  const [historyId, setHistoryId] = useState(() => persistedPlannerSnapshot?.historyId ?? null);
   const [error, setError] = useState('');
-  const [resultLimit, setResultLimit] = useState(30);
-  const [authUser, setAuthUser] = useState(() => readAuthSnapshot());
+  const [resultLimit, setResultLimit] = useState(() => {
+    const fallback = 30;
+    const candidate = persistedPlannerSnapshot?.resultLimit;
+    return Number.isFinite(candidate) ? candidate : fallback;
+  });
+  const [authUser, setAuthUser] = useState(initialAuthSnapshot);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
   useEffect(() => {
@@ -159,6 +180,35 @@ const ResearchPlanner = () => {
     setHistory(readHistoryForUser(authUser));
   }, [authUser]);
 
+  useEffect(() => {
+    writeResearchPlannerSnapshot({
+      text,
+      researchTopic,
+      researchGoal,
+      timeWindow,
+      focusType,
+      result,
+      results,
+      historyId,
+      resultLimit,
+      showHistory,
+      userEmail: authUser?.email || null,
+      updatedAt: Date.now(),
+    });
+  }, [
+    text,
+    researchTopic,
+    researchGoal,
+    timeWindow,
+    focusType,
+    result,
+    results,
+    historyId,
+    resultLimit,
+    showHistory,
+    authUser,
+  ]);
+
   const handleLogout = () => {
     logoutAuth();
     setAuthUser(null);
@@ -167,6 +217,7 @@ const ResearchPlanner = () => {
     setResult(null);
     setError('');
     setShowHistory(false);
+    clearResearchPlannerSnapshot();
     window.dispatchEvent(new Event('auth:changed'));
   };
 
@@ -247,6 +298,7 @@ const ResearchPlanner = () => {
     setError('');
     setShowHistory(false);
     setHistoryId(null);
+    clearResearchPlannerSnapshot();
   };
 
   const handleFileChange = (e) => {

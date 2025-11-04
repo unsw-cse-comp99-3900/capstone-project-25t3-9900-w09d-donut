@@ -97,6 +97,26 @@ const escapePdfText = (value) => {
   return String(value).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)').replace(/\r?\n/g, '\\n');
 };
 
+const normalizeTimestamp = (value) => {
+  if (!value) {
+    return 0;
+  }
+  const date = new Date(value);
+  const time = date.getTime();
+  return Number.isNaN(time) ? 0 : time;
+};
+
+const sortSummaryRecords = (items) => {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return [...items].sort((a, b) => {
+    const aTime = normalizeTimestamp(a?.updated_at || a?.created_at);
+    const bTime = normalizeTimestamp(b?.updated_at || b?.created_at);
+    return bTime - aTime;
+  });
+};
+
 const splitIntoLines = (text, width = 90) => {
   if (!text) {
     return [''];
@@ -278,10 +298,12 @@ const SummaryReviewPage = () => {
   })();
 
   const initialSummaryHistory = Array.isArray(state?.summaryHistory)
-    ? state.summaryHistory.map((item) => ({
-        ...item,
-        pdf_url: normalizePdfUrl(item.pdf_url),
-      }))
+    ? sortSummaryRecords(
+        state.summaryHistory.map((item) => ({
+          ...item,
+          pdf_url: normalizePdfUrl(item.pdf_url),
+        }))
+      )
     : [];
   const initialActiveSummaryId = state?.activeSummaryId ?? initialSummaryHistory[0]?.id ?? state?.summaryId ?? null;
 
@@ -365,10 +387,12 @@ const SummaryReviewPage = () => {
           { headers }
         );
         const list = Array.isArray(response.data?.summaries)
-          ? response.data.summaries.map((item) => ({
-              ...item,
-              pdf_url: normalizePdfUrl(item.pdf_url),
-            }))
+          ? sortSummaryRecords(
+              response.data.summaries.map((item) => ({
+                ...item,
+                pdf_url: normalizePdfUrl(item.pdf_url),
+              }))
+            )
           : [];
         setSummaryHistory(list);
         if (!list.length) {
