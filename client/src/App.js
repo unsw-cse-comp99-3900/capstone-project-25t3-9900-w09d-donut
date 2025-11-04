@@ -28,9 +28,11 @@ import {
   Link as MuiLink,
 } from '@mui/material';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
-import { BrowserRouter as Router, Routes, Route, Link as RouterLink } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link as RouterLink, useNavigate } from 'react-router-dom';
 import AuthPage from './pages/AuthPage';
+import SummaryReviewPage from './pages/SummaryReviewPage';
 import { logout as logoutAuth } from './services/authApi';
+import { writeSummaryReviewSnapshot } from './services/summaryReviewState';
 
 const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/$/, '');
 const HISTORY_STORAGE_KEY = 'searchHistoryByUser';
@@ -108,6 +110,7 @@ const writeHistoryForUser = (snapshot, entries) => {
 };
 
 const ResearchPlanner = () => {
+  const navigate = useNavigate();
   const [text, setText] = useState('');
   const [researchTopic, setResearchTopic] = useState('');
   const [researchGoal, setResearchGoal] = useState('Broad Survey');
@@ -117,14 +120,17 @@ const ResearchPlanner = () => {
   const [loading, setLoading] = useState(false);
   const [pdfFiles, setPdfFiles] = useState([]);
   const [uploadStatus, setUploadStatus] = useState('');
+  // eslint-disable-next-line no-unused-vars
   const [keywords, setKeywords] = useState([]);
   const [history, setHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
   const [results, setResults] = useState([]);
+  const [historyId, setHistoryId] = useState(null);
   const [error, setError] = useState('');
   const [resultLimit, setResultLimit] = useState(30);
   const [authUser, setAuthUser] = useState(() => readAuthSnapshot());
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -169,6 +175,7 @@ const ResearchPlanner = () => {
     setResult(null);
     setError('');
     setResults([]);
+    setHistoryId(null);
 
     try {
       const keywordsArray = researchTopic
@@ -189,8 +196,17 @@ const ResearchPlanner = () => {
         limit: resultLimit,
       };
 
-      const response = await axios.post(`${API_BASE_URL}/api/normal_search`, body);
-      setResults(response.data.results || []);
+      if (authUser?.email) {
+        body.user_email = authUser.email;
+      }
+
+      const requestConfig = authUser?.email
+        ? { headers: { 'X-User-Email': authUser.email } }
+        : {};
+
+  const response = await axios.post(`${API_BASE_URL}/api/normal_search`, body, requestConfig);
+  setResults(response.data.results || []);
+  setHistoryId(response.data.history_id ?? null);
 
       const topic = researchTopic.trim() || 'N/A';
       const goal = researchGoal || 'N/A';
@@ -230,12 +246,14 @@ const ResearchPlanner = () => {
     setResults([]);
     setError('');
     setShowHistory(false);
+    setHistoryId(null);
   };
 
   const handleFileChange = (e) => {
     setPdfFiles(e.target.files);
   };
 
+  // eslint-disable-next-line no-unused-vars
   const handleUpload = async () => {
     if (pdfFiles.length === 0) {
       setUploadStatus('Please select at least one PDF file.');
@@ -264,9 +282,117 @@ const ResearchPlanner = () => {
     }
   };
 
+  const handleOpenSummaryReview = async () => {
+    const baseState = {
+      summaryText: '',
+      initialPlan: result?.plan || '',
+      historyId,
+      results,
+      researchTopic,
+      researchGoal,
+      timeWindow,
+      focusType,
+      summaryPdfUrl: null,
+      summaryId: null,
+    };
+
+    writeSummaryReviewSnapshot({
+      ...baseState,
+      messages: [],
+      summaryMetadata: null,
+      summaryCitations: [],
+      sessionId: null,
+      updatedAt: Date.now(),
+    });
+
+    if (!historyId || !authUser?.email) {
+      navigate('/summary', { state: baseState });
+      return;
+    }
+
+    setSummaryLoading(true);
+    try {
+      const sessionResponse = await axios.post(
+        `${API_BASE_URL}/api/chat/sessions`,
+        { history_id: historyId, user_email: authUser.email },
+        { headers: { 'X-User-Email': authUser.email } }
+      );
+
+      const sessionData = sessionResponse.data || {};
+      const sessionId = sessionData.session_id;
+      const messages = Array.isArray(sessionData.messages) ? sessionData.messages : [];
+
+      let summaryText = baseState.summaryText;
+      if (!summaryText && messages.length) {
+        const lastAssistant = [...messages].reverse().find((msg) => msg.role === 'assistant' && msg.content);
+        summaryText = lastAssistant?.content || '';
+      }
+
+      let summaryMeta = sessionData.metadata;
+      let summaryPdfUrl = baseState.summaryPdfUrl;
+      let summaryId = baseState.summaryId;
+      let summaryCitations = [];
+
+      if (sessionId && !summaryText) {
+        const summaryResponse = await axios.post(
+          `${API_BASE_URL}/api/summaries`,
+          {
+            session_id: sessionId,
+            history_id: historyId,
+            summary_type: 'comprehensive',
+            language: 'en',
+          },
+          { headers: { 'X-User-Email': authUser.email } }
+        );
+        const summaryData = summaryResponse.data || {};
+        summaryText = summaryData.summary || summaryText;
+        summaryMeta = summaryData.metadata || summaryMeta;
+        summaryPdfUrl = summaryData.pdf_url ?? summaryPdfUrl;
+        summaryId = summaryData.summary_id ?? summaryId;
+        summaryCitations = Array.isArray(summaryData.citations) ? summaryData.citations : summaryCitations;
+      }
+
+      writeSummaryReviewSnapshot({
+        ...baseState,
+        summaryText,
+        sessionId,
+        messages,
+        summaryMetadata: summaryMeta,
+        summaryPdfUrl,
+        summaryId,
+        summaryCitations,
+        updatedAt: Date.now(),
+      });
+
+      navigate('/summary', {
+        state: {
+          ...baseState,
+          summaryText,
+          sessionId,
+          messages,
+          summaryMetadata: summaryMeta,
+          selectedIds: sessionData.selected_ids,
+          summaryPdfUrl,
+          summaryId,
+          summaryCitations,
+        },
+      });
+    } catch (err) {
+      console.error('Unable to prepare summary review', err);
+      setError('Unable to generate the summary automatically. You can still refine it in the review page.');
+      writeSummaryReviewSnapshot({
+        ...baseState,
+        updatedAt: Date.now(),
+      });
+      navigate('/summary', { state: baseState });
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
   return (
     <Box sx={{ maxWidth: 900, mx: 'auto', mt: 4, px: 2 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mb: 2 }}>
         {authUser ? (
           <Stack direction="row" spacing={1} alignItems="center">
             <Typography variant="body1" fontWeight={500}>
@@ -540,6 +666,18 @@ const ResearchPlanner = () => {
                   </Box>
                 </Card>
               </Box>
+
+              <Box sx={{ mt: 3, display: 'flex', justifyContent: { xs: 'stretch', sm: 'flex-start' } }}>
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  onClick={handleOpenSummaryReview}
+                  disabled={summaryLoading}
+                  sx={{ minWidth: 220 }}
+                >
+                  {summaryLoading ? 'Preparing Summary…' : 'Generate Summary Review'}
+                </Button>
+              </Box>
             </>
           )}
           {error && (
@@ -606,6 +744,7 @@ const App = () => (
     <Routes>
       <Route path="/" element={<ResearchPlanner />} />
       <Route path="/auth" element={<AuthPage />} />
+      <Route path="/summary" element={<SummaryReviewPage />} />
     </Routes>
   </Router>
 );
