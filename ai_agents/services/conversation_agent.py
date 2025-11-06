@@ -232,10 +232,16 @@ class NaturalLanguageInterpreter:
         return any(term in text for term in ["more", "additional", "another", "extra"])
 
     def _resolve_targets(self, message: str, session: ConversationSession) -> List[str]:
+        def _normalize(raw: str) -> str:
+            value = raw.strip().rstrip(".")
+            if "openalex.org" in value:
+                value = value.replace("/works/", "/")
+            return value
+
         ids = set(self.ID_PATTERN.findall(message))
         url_matches = self.URL_PATTERN.findall(message)
         for url in url_matches:
-            ids.add(url.strip().rstrip("."))
+            ids.add(_normalize(url))
 
         index_matches = self.INDEX_PATTERN.findall(message)
         for index_str in index_matches:
