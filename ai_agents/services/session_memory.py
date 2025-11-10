@@ -19,6 +19,7 @@ class SessionMemory:
     session: ConversationSession
     max_history: int = 25
     _condensed_history: List[ConversationMessage] = field(default_factory=list)
+    _summary_fragments: List[str] = field(default_factory=list)
 
     def add_user_message(self, content: str) -> None:
         self.session.record_message("user", content)
@@ -43,6 +44,16 @@ class SessionMemory:
     def get_artifact(self, name: str) -> Optional[str]:
         return self.session.artifacts.get(name)
 
+    def append_summary(self, fragment: str, max_fragments: int = 12) -> None:
+        fragment = fragment.strip()
+        if not fragment:
+            return
+        self._summary_fragments.append(fragment)
+        if len(self._summary_fragments) > max_fragments:
+            self._summary_fragments = self._summary_fragments[-max_fragments:]
+        summary_text = "\n".join(self._summary_fragments)
+        self.store_artifact("conversation_summary", summary_text)
+
     def snapshot(self) -> SessionMemorySnapshot:
         return self.session.snapshot(max_history=self.max_history)
 
@@ -57,3 +68,7 @@ class SessionMemory:
         if not self._condensed_history:
             self._refresh_history()
         return list(self._condensed_history)
+
+    @property
+    def conversation_summary(self) -> str:
+        return self.session.artifacts.get("conversation_summary", "")

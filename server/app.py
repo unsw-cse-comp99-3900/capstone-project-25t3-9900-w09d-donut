@@ -1,10 +1,9 @@
 from . import create_app
 from flask_cors import CORS
-from . import create_app
 
 app = create_app()
 
-# ✅ 启用 CORS
+# Enable CORS for API routes
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 

@@ -34,6 +34,8 @@ class FocusedSynthesisTool(AgentTool):
             mode="focused",
             focus_aspect=focus,
             language=str(payload.get("language") or "en"),
+            system_prompt=payload.get("system_prompt"),
+            conversation_summary=payload.get("conversation_summary"),
         )
         result = self.summarizer.summarize(req)
         return ToolResult(
