@@ -3,12 +3,12 @@ FROM node:20-alpine AS base
 
 WORKDIR /app
 
-# Install dependencies first for better caching layers
-COPY package.json package-lock.json ./
+# Install dependencies using project manifests
+COPY client/package.json client/package-lock.json ./
 RUN npm install
 
 # Copy application source
-COPY . .
+COPY client/ .
 
 # CRA dev server needs to listen on 0.0.0.0 for container access
 ENV HOST=0.0.0.0
