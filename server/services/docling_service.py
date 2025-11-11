@@ -4,20 +4,29 @@ import concurrent.futures
 import logging
 import tempfile
 import threading
+from collections import OrderedDict
 from pathlib import Path
-from typing import Callable, Dict, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 from urllib.parse import urlparse
 
 import requests
 
-try:  # pragma: no cover - optional dependency shim for local testing
-    from docling.document import DocumentConverter
-except ModuleNotFoundError:  # pragma: no cover
-    class DocumentConverter:  # type: ignore
-        def convert(self, path: str):  # pylint: disable=unused-argument
-            raise ModuleNotFoundError(
-                "Docling is not installed. Install it via requirements to enable PDF ingestion."
-            )
+try:  # pragma: no cover - optional fallback dependency
+    import fitz  # type: ignore
+except Exception:  # pragma: no cover
+    fitz = None
+
+try:  # pragma: no cover - prefer new API
+    from docling.document_converter import DocumentConverter
+except ModuleNotFoundError:
+    try:
+        from docling.document import DocumentConverter  # type: ignore
+    except ModuleNotFoundError:
+        class DocumentConverter:  # type: ignore
+            def convert(self, path: str):  # pylint: disable=unused-argument
+                raise ModuleNotFoundError(
+                    "Docling is not installed. Install it via requirements to enable PDF ingestion."
+                )
 
 from server.data_access.paper_repository import PaperRepository
 
@@ -159,22 +168,133 @@ class DoclingIngestionService:
                 pass
 
     def _convert_file(self, file_path: Path) -> Dict[str, object]:
-        document = self._converter.convert(str(file_path))
-        plain_text = getattr(document, "plain_text", "") or ""
-        sections = []
-        tables = []
+        conversion = self._converter.convert(str(file_path))
+        document = getattr(conversion, "document", None)
+        if document is None:
+            documents = getattr(conversion, "documents", None) or []
+            if documents:
+                document = documents[0]
+        if document is None:
+            raise ValueError("Docling conversion produced no document")
+
+        sections_serialized, section_chunks = self._serialize_sections(document)
+        structured_sections = self._structure_sections(sections_serialized)
+        tables_serialized = self._serialize_tables(document)
         metadata = _serialize_component(getattr(document, "metadata", {})) or {}
-        for section in getattr(document, "sections", []) or []:
-            serialized = _serialize_component(section)
-            if serialized:
-                sections.append(serialized)
-        for table in getattr(document, "tables", []) or []:
-            serialized = _serialize_component(table)
-            if serialized:
-                tables.append(serialized)
+
+        plain_text = getattr(document, "plain_text", "") or ""
+        fallback_used: List[str] = []
+        if not plain_text and section_chunks:
+            plain_text = "\n\n".join(section_chunks)
+            fallback_used.append("sections")
+
+        if not plain_text:
+            plain_text = self._collect_block_text(document)
+            if plain_text:
+                fallback_used.append("blocks")
+
+        if not plain_text:
+            plain_text = self._extract_with_pymupdf(file_path)
+            if plain_text:
+                fallback_used.append("pymupdf")
+
+        if fallback_used:
+            metadata = dict(metadata)
+            metadata["extraction_fallback"] = fallback_used
+
         return {
-            "plain_text": plain_text,
-            "sections": sections,
-            "tables": tables,
+            "plain_text": plain_text or "",
+            "sections": sections_serialized,
+            "tables": tables_serialized,
             "metadata": metadata,
+            "structured_sections": structured_sections,
         }
+
+    def _serialize_sections(self, document) -> tuple[List[object], List[str]]:
+        serialized: List[object] = []
+        chunks: List[str] = []
+        for section in getattr(document, "sections", []) or []:
+            payload = _serialize_component(section)
+            if payload is None:
+                continue
+            serialized.append(payload)
+            text = ""
+            if isinstance(payload, dict):
+                text = str(payload.get("text") or payload.get("content") or "")
+            else:
+                text = str(payload)
+            text = text.strip()
+            if text:
+                chunks.append(text)
+        return serialized, chunks
+
+    def _serialize_tables(self, document) -> List[object]:
+        serialized: List[object] = []
+        for table in getattr(document, "tables", []) or []:
+            payload = _serialize_component(table)
+            if payload:
+                serialized.append(payload)
+        return serialized
+
+    def _structure_sections(self, sections: List[object]) -> Dict[str, List[Dict[str, object]]]:
+        buckets: Dict[str, List[Dict[str, object]]] = OrderedDict(
+            [
+                ("abstract", []),
+                ("introduction", []),
+                ("methods", []),
+                ("results", []),
+                ("discussion", []),
+                ("conclusion", []),
+                ("references", []),
+                ("other", []),
+            ]
+        )
+        current_key = "other"
+        KEYWORDS = OrderedDict(
+            [
+                ("abstract", ("abstract", "summary")),
+                ("introduction", ("introduction", "background")),
+                ("methods", ("method", "approach", "experimental", "materials")),
+                ("results", ("result", "finding", "analysis")),
+                ("discussion", ("discussion", "insight")),
+                ("conclusion", ("conclusion", "future work")),
+                ("references", ("reference", "bibliography", "citation")),
+            ]
+        )
+
+        for section in sections:
+            if isinstance(section, dict):
+                title = (section.get("title") or section.get("heading") or "").lower()
+            else:
+                title = str(section).lower()
+            matched = next((key for key, kws in KEYWORDS.items() if any(kw in title for kw in kws)), None)
+            if matched:
+                current_key = matched
+            buckets[current_key].append(section if isinstance(section, dict) else {"raw": section})
+        return buckets
+
+    def _collect_block_text(self, document) -> str:
+        chunks: List[str] = []
+        for page in getattr(document, "pages", []) or []:
+            for block in getattr(page, "blocks", []) or []:
+                text = getattr(block, "text", "") or ""
+                text = text.strip()
+                if text:
+                    chunks.append(text)
+        return "\n\n".join(chunks)
+
+    def _extract_with_pymupdf(self, file_path: Path) -> str:
+        if fitz is None:
+            return ""
+        try:
+            doc = fitz.open(str(file_path))
+        except Exception:  # pragma: no cover - file issues
+            return ""
+        chunks: List[str] = []
+        for page in doc:
+            text = page.get_text("text") or ""
+            text = text.strip()
+            if text:
+                chunks.append(text)
+        doc.close()
+        return "\n\n".join(chunks)

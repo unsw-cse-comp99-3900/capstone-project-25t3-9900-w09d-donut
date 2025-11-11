@@ -760,6 +760,16 @@ class ConversationAgent:
         except (TypeError, ValueError):
             year_val = None
         url = str(item.get("link") or item.get("url") or paper_id)
+        full_text = str(
+            item.get("full_text")
+            or item.get("plain_text")
+            or item.get("summary")
+            or item.get("abstract")
+            or ""
+        )
+        sections = item.get("sections") or item.get("structured_sections") or []
+        tables = item.get("tables") or item.get("structured_tables") or []
+        metadata = item.get("fulltext_metadata") or item.get("metadata") or {}
         return PaperSummary(
             paper_id=paper_id,
             title=title,
@@ -767,6 +777,10 @@ class ConversationAgent:
             authors=authors,
             year=year_val,
             url=url,
+            full_text=full_text,
+            sections=sections,
+            tables=tables,
+            metadata=metadata if isinstance(metadata, dict) else {},
         )
 
     def _build_default_registry(self) -> ToolRegistry:

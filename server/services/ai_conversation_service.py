@@ -81,6 +81,10 @@ class AIConversationService:
                     authors=tuple(item.get("authors") or []),
                     year=item.get("publication_year"),
                     url=item.get("url"),
+                    full_text=item.get("full_text") or "",
+                    sections=item.get("sections") or [],
+                    tables=item.get("tables") or [],
+                    metadata=item.get("fulltext_metadata") or {},
                 )
             )
             if item.get("selected"):

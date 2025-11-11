@@ -1,11 +1,14 @@
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
 
 import requests
 
 from server.data_access.paper_repository import PaperRepository
 from server.data_access.search_history_repository import SearchHistoryRepository
 
+if TYPE_CHECKING:
+    from .docling_service import DoclingIngestionService
+    from .pdf_cache_service import PDFCacheService
 
 def search_openalex_papers(
     keywords: List[str],
@@ -93,14 +96,20 @@ def search_openalex_papers(
 class AcademicSearchService:
     paper_repository: PaperRepository
     history_repository: SearchHistoryRepository
+    docling_service: Optional["DoclingIngestionService"]
+    pdf_cache_service: Optional["PDFCacheService"]
 
     def __init__(
         self,
         paper_repository: Optional[PaperRepository] = None,
         history_repository: Optional[SearchHistoryRepository] = None,
+        docling_service: Optional["DoclingIngestionService"] = None,
+        pdf_cache_service: Optional["PDFCacheService"] = None,
     ) -> None:
         self.paper_repository = paper_repository or PaperRepository()
         self.history_repository = history_repository or SearchHistoryRepository()
+        self.docling_service = docling_service
+        self.pdf_cache_service = pdf_cache_service
 
     def search_and_store(
         self,
@@ -119,6 +128,8 @@ class AcademicSearchService:
             limit=limit,
         )
         self.paper_repository.upsert_many(results)
+        cached_paths = self._cache_pdfs(results)
+        self._attach_cached_paths(results, cached_paths)
 
         filters_payload = {
             "keywords": list(keywords),
@@ -134,6 +145,8 @@ class AcademicSearchService:
             papers=results,
             session_id=session_id,
         )
+        if self.docling_service:
+            self.docling_service.enqueue_many(results)
         return history_id, results
 
     def load_history(self, history_id: int) -> Optional[dict]:
@@ -161,6 +174,24 @@ class AcademicSearchService:
             return []
 
         self.paper_repository.upsert_many(results)
+        cached_paths = self._cache_pdfs(results)
+        self._attach_cached_paths(results, cached_paths)
+        if self.docling_service:
+            self.docling_service.enqueue_many(results)
         appended_ids = self.history_repository.append_papers(history_id, results, selected=True)
         appended_set = set(appended_ids)
         return [item for item in results if (item.get("id") or item.get("paper_id")) in appended_set]
+
+    def _cache_pdfs(self, papers: Sequence[dict]) -> dict:
+        if not self.pdf_cache_service:
+            return {}
+        return self.pdf_cache_service.cache_many(papers)
+
+    @staticmethod
+    def _attach_cached_paths(papers: Sequence[dict], cached_paths: dict) -> None:
+        if not cached_paths:
+            return
+        for paper in papers:
+            paper_id = paper.get("id") or paper.get("paper_id")
+            if paper_id and paper_id in cached_paths:
+                paper["cached_pdf_path"] = cached_paths[paper_id]

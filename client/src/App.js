@@ -17,6 +17,7 @@ import {
   FormControl,
   Stack,
   Alert,
+  Chip,
   Table,
   TableBody,
   TableCell,
@@ -125,6 +126,14 @@ const ResearchPlanner = () => {
   const [error, setError] = useState('');
   const [resultLimit, setResultLimit] = useState(30);
   const [authUser, setAuthUser] = useState(() => readAuthSnapshot());
+  const [activeHistoryId, setActiveHistoryId] = useState(null);
+  const [chatSessionId, setChatSessionId] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatStatus, setChatStatus] = useState('');
+  const [chatError, setChatError] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [selectedPaperIds, setSelectedPaperIds] = useState([]);
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -153,6 +162,112 @@ const ResearchPlanner = () => {
     setHistory(readHistoryForUser(authUser));
   }, [authUser]);
 
+  const resolveAuthEmail = () => authUser?.email || localStorage.getItem('authEmail') || '';
+  const canChat = Boolean(activeHistoryId && resolveAuthEmail());
+
+  const buildAuthHeaders = () => {
+    const email = resolveAuthEmail();
+    return email ? { 'X-User-Email': email } : {};
+  };
+
+  const normalizePapers = (items) =>
+    (items || []).map((item, index) => {
+      const rawAuthors = item.authors || item.author_names || [];
+      let authors = [];
+      if (Array.isArray(rawAuthors)) {
+        authors = rawAuthors;
+      } else if (typeof rawAuthors === 'string') {
+        authors = rawAuthors.split(/[,;]+/).map((author) => author.trim()).filter(Boolean);
+      }
+      const paperId = item.paper_id || item.id || item.link || item.url || `paper-${index}`;
+      return {
+        paper_id: paperId,
+        title: item.title || item.display_name || 'Untitled',
+        authors,
+        publication_date: item.publication_date || item.year || '',
+        publication_year: item.publication_year || item.year,
+        source: item.source || item.journal || '',
+        cited_by_count: item.cited_by_count ?? item.citations ?? 0,
+        link: item.link || item.url || paperId,
+        pdf_url: item.pdf_url || item.pdf || '',
+        selected: item.selected !== undefined ? Boolean(item.selected) : true,
+      };
+    });
+
+  const refreshSelectionFromPapers = (papers) => {
+    const selectedIds = papers.filter((paper) => paper.selected !== false && paper.paper_id).map((paper) => paper.paper_id);
+    setSelectedPaperIds(selectedIds);
+  };
+
+  const fetchHistoryDetails = async (historyId) => {
+    const email = resolveAuthEmail();
+    if (!historyId || !email) {
+      return null;
+    }
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/search/history/${historyId}`, {
+        headers: buildAuthHeaders(),
+      });
+      const historyRecord = response.data.history;
+      if (!historyRecord) {
+        return null;
+      }
+      const normalized = normalizePapers(historyRecord.papers || []);
+      setResults(normalized);
+      refreshSelectionFromPapers(normalized);
+      return normalized;
+    } catch (historyErr) {
+      console.error(historyErr);
+      setChatError(historyErr?.response?.data?.error || 'Unable to refresh paper selection.');
+      return null;
+    }
+  };
+
+  const resetChatState = () => {
+    setActiveHistoryId(null);
+    setChatSessionId(null);
+    setChatMessages([]);
+    setChatInput('');
+    setChatStatus('');
+    setChatError('');
+    setSelectedPaperIds([]);
+  };
+
+  const bootstrapChatSession = async (historyId) => {
+    if (!historyId) {
+      setChatError('Run a search with your account to start chatting.');
+      return null;
+    }
+    const email = resolveAuthEmail();
+    if (!email) {
+      setChatError('Please sign in to use the AI assistant.');
+      return null;
+    }
+    setChatStatus('Connecting to AI assistant...');
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/api/chat/sessions`,
+        {
+          history_id: historyId,
+          user_email: email,
+        },
+        {
+          headers: buildAuthHeaders(),
+        }
+      );
+      setChatSessionId(response.data.session_id);
+      setChatMessages(response.data.messages || []);
+      setChatStatus('Ready to chat');
+      setChatError('');
+      return response.data.session_id;
+    } catch (sessionErr) {
+      console.error(sessionErr);
+      setChatStatus('');
+      setChatError(sessionErr?.response?.data?.error || 'Unable to start AI chat session.');
+      return null;
+    }
+  };
+
   const handleLogout = () => {
     logoutAuth();
     setAuthUser(null);
@@ -161,10 +276,12 @@ const ResearchPlanner = () => {
     setResult(null);
     setError('');
     setShowHistory(false);
+    resetChatState();
     window.dispatchEvent(new Event('auth:changed'));
   };
 
   const handleGeneratePlan = async () => {
+    resetChatState();
     setLoading(true);
     setResult(null);
     setError('');
@@ -187,10 +304,22 @@ const ResearchPlanner = () => {
         date_range: ['2020-01-01', '2025-01-01'],
         concepts: null,
         limit: resultLimit,
+        ...(resolveAuthEmail() ? { user_email: resolveAuthEmail() } : {}),
       };
 
-      const response = await axios.post(`${API_BASE_URL}/api/normal_search`, body);
-      setResults(response.data.results || []);
+      const response = await axios.post(`${API_BASE_URL}/api/normal_search`, body, {
+        headers: buildAuthHeaders(),
+      });
+      const normalizedResults = normalizePapers(response.data.results || []);
+      setResults(normalizedResults);
+      refreshSelectionFromPapers(normalizedResults);
+
+      const historyId = response.data.history_id || null;
+      setActiveHistoryId(historyId);
+      if (historyId && resolveAuthEmail()) {
+        await fetchHistoryDetails(historyId);
+        await bootstrapChatSession(historyId);
+      }
 
       const topic = researchTopic.trim() || 'N/A';
       const goal = researchGoal || 'N/A';
@@ -230,6 +359,7 @@ const ResearchPlanner = () => {
     setResults([]);
     setError('');
     setShowHistory(false);
+    resetChatState();
   };
 
   const handleFileChange = (e) => {
@@ -249,9 +379,11 @@ const ResearchPlanner = () => {
 
     setUploadStatus('Uploading...');
     try {
+      const uploadHeaders = buildAuthHeaders();
       const response = await fetch(`${API_BASE_URL}/upload_pdf`, {
         method: 'POST',
         body: formData,
+        headers: Object.keys(uploadHeaders).length ? uploadHeaders : undefined,
       });
       const data = await response.json();
       setUploadStatus('Uploaded successfully.');
@@ -261,6 +393,56 @@ const ResearchPlanner = () => {
     } catch (uploadError) {
       console.error(uploadError);
       setUploadStatus('Upload failed.');
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!chatInput.trim()) {
+      return;
+    }
+    if (!activeHistoryId) {
+      setChatError('Please run a logged-in search before chatting.');
+      return;
+    }
+    const email = resolveAuthEmail();
+    if (!email) {
+      setChatError('Please sign in to chat with the AI assistant.');
+      return;
+    }
+    setChatLoading(true);
+    setChatError('');
+    let sessionId = chatSessionId;
+    if (!sessionId) {
+      sessionId = await bootstrapChatSession(activeHistoryId);
+      if (!sessionId) {
+        setChatLoading(false);
+        return;
+      }
+    }
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/api/chat/sessions/${sessionId}/messages`,
+        {
+          message: chatInput.trim(),
+          user_email: email,
+        },
+        {
+          headers: buildAuthHeaders(),
+        }
+      );
+      setChatMessages(response.data.messages || []);
+      setChatInput('');
+      if (Array.isArray(response.data.selected_ids)) {
+        setSelectedPaperIds(response.data.selected_ids);
+      }
+      if (activeHistoryId) {
+        await fetchHistoryDetails(activeHistoryId);
+      }
+    } catch (chatErr) {
+      console.error(chatErr);
+      setChatError(chatErr?.response?.data?.error || 'Assistant failed to respond. Please try again.');
+    } finally {
+      setChatLoading(false);
     }
   };
 
@@ -299,10 +481,15 @@ const ResearchPlanner = () => {
               placeholder="Type your research topic, keywords, or upload related files..."
               sx={{ mb: 2 }}
             />
-            <Button variant="contained" component="label" sx={{ mt: 1 }}>
-              Upload PDFs
-              <input type="file" hidden accept="application/pdf" multiple onChange={handleFileChange} />
-            </Button>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
+              <Button variant="contained" component="label">
+                Upload PDFs
+                <input type="file" hidden accept="application/pdf" multiple onChange={handleFileChange} />
+              </Button>
+              <Button variant="outlined" onClick={handleUpload} disabled={pdfFiles.length === 0}>
+                Process Upload
+              </Button>
+            </Stack>
             {pdfFiles.length > 0 && (
               <Box sx={{ mt: 1 }}>
                 <Typography variant="body2" color="text.secondary">Selected files:</Typography>
@@ -336,6 +523,28 @@ const ResearchPlanner = () => {
               <Alert severity={uploadStatus.includes('failed') ? 'error' : 'success'} sx={{ mt: 1 }}>
                 {uploadStatus}
               </Alert>
+            )}
+            {keywords.length > 0 && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Suggested keywords from PDF upload (click to add):
+                </Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  {keywords.map((word) => (
+                    <Chip
+                      key={word}
+                      label={word}
+                      size="small"
+                      onClick={() =>
+                        setResearchTopic((prev) =>
+                          prev.includes(word) ? prev : `${prev ? `${prev}, ` : ''}${word}`
+                        )
+                      }
+                      sx={{ mb: 1 }}
+                    />
+                  ))}
+                </Stack>
+              </Box>
             )}
           </Box>
 
@@ -507,35 +716,89 @@ const ResearchPlanner = () => {
 
               <Box sx={{ mt: 5 }}>
                 <Card variant="outlined" sx={{ p: 2 }}>
-                  <Typography variant="h6" gutterBottom>
-                    💬 High-level Discussion
-                  </Typography>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} spacing={1}>
+                    <Typography variant="h6">
+                      💬 AI Conversation
+                    </Typography>
+                    {chatStatus && (
+                      <Typography variant="body2" color="text.secondary">
+                        {chatStatus}
+                      </Typography>
+                    )}
+                  </Stack>
+
+                  {chatError && (
+                    <Alert severity="error" sx={{ mt: 2 }}>
+                      {chatError}
+                    </Alert>
+                  )}
 
                   <Box
                     sx={{
-                      height: 250,
+                      height: 260,
                       overflowY: 'auto',
                       border: '1px solid #ccc',
                       borderRadius: 1,
-                      p: 1,
-                      mb: 2,
+                      p: 1.5,
+                      my: 2,
                       bgcolor: '#fafafa',
                     }}
                   >
-                    <Typography variant="body2" sx={{ mb: 1 }}>
-                      <strong>AI:</strong> Hi! I&apos;m here for high-level discussion. Ask me anything about your research plan!
-                    </Typography>
+                    {chatMessages.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        {canChat
+                          ? 'Start the conversation to discuss these results with the AI assistant.'
+                          : 'Sign in and run a search to enable the AI conversation experience.'}
+                      </Typography>
+                    ) : (
+                      chatMessages.map((msg, index) => (
+                        <Box
+                          key={`${msg.role}-${index}-${msg.created_at || index}`}
+                          sx={{
+                            mb: 1.5,
+                            textAlign: msg.role === 'user' ? 'right' : 'left',
+                          }}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            {msg.role === 'user' ? 'You' : 'Assistant'}
+                          </Typography>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              display: 'inline-block',
+                              px: 1.5,
+                              py: 1,
+                              borderRadius: 2,
+                              bgcolor: msg.role === 'user' ? 'primary.light' : 'grey.200',
+                              color: 'text.primary',
+                              whiteSpace: 'pre-line',
+                              mt: 0.5,
+                            }}
+                          >
+                            {msg.content}
+                          </Typography>
+                        </Box>
+                      ))
+                    )}
                   </Box>
 
                   <Box sx={{ display: 'flex', gap: 1 }}>
                     <TextField
                       fullWidth
-                      placeholder="Type your message here..."
+                      placeholder={canChat ? 'Ask about the retrieved papers...' : 'Sign in and run a search to chat'}
                       variant="outlined"
                       size="small"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      disabled={!canChat || chatLoading}
                     />
-                    <Button variant="contained" color="primary">
-                      Send
+                    <Button
+                      variant="contained"
+                      color="primary"
+                      onClick={handleSendMessage}
+                      disabled={!canChat || chatLoading || !chatInput.trim()}
+                    >
+                      {chatLoading ? 'Sending...' : 'Send'}
                     </Button>
                   </Box>
                 </Card>
@@ -565,32 +828,47 @@ const ResearchPlanner = () => {
                     <TableCell><strong>Title</strong></TableCell>
                     <TableCell><strong>Source</strong></TableCell>
                     <TableCell><strong>Cited</strong></TableCell>
+                    <TableCell><strong>Status</strong></TableCell>
                     <TableCell><strong>PDF</strong></TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {results.map((row, idx) => (
-                    <TableRow key={idx}>
-                      <TableCell>{row.authors?.join(', ') || '-'}</TableCell>
-                      <TableCell>{row.publication_date || '-'}</TableCell>
-                      <TableCell>
-                        <MuiLink href={row.link} target="_blank" rel="noopener">
-                          {row.title}
-                        </MuiLink>
-                      </TableCell>
-                      <TableCell>{row.source || '-'}</TableCell>
-                      <TableCell>{row.cited_by_count || 0}</TableCell>
-                      <TableCell>
-                        {row.pdf_url ? (
-                          <MuiLink href={row.pdf_url} target="_blank" rel="noopener">
-                            <PictureAsPdfIcon color="error" />
+                  {results.map((row, idx) => {
+                    const isSelected = selectedPaperIds.includes(row.paper_id);
+                    return (
+                      <TableRow
+                        key={row.paper_id || idx}
+                        selected={isSelected}
+                        sx={{ bgcolor: isSelected ? 'rgba(25, 118, 210, 0.08)' : undefined }}
+                      >
+                        <TableCell>{Array.isArray(row.authors) && row.authors.length ? row.authors.join(', ') : '-'}</TableCell>
+                        <TableCell>{row.publication_date || row.publication_year || '-'}</TableCell>
+                        <TableCell>
+                          <MuiLink href={row.link} target="_blank" rel="noopener">
+                            {row.title}
                           </MuiLink>
-                        ) : (
-                          '-'
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+                        <TableCell>{row.source || '-'}</TableCell>
+                        <TableCell>{row.cited_by_count || 0}</TableCell>
+                        <TableCell>
+                          {isSelected ? (
+                            <Chip label="In scope" color="success" size="small" />
+                          ) : (
+                            <Chip label="Dropped" variant="outlined" size="small" />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {row.pdf_url ? (
+                            <MuiLink href={row.pdf_url} target="_blank" rel="noopener">
+                              <PictureAsPdfIcon color="error" />
+                            </MuiLink>
+                          ) : (
+                            '-'
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </TableContainer>

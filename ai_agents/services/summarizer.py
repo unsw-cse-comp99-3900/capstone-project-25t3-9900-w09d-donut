@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional, Union, cast
 
-from ai_agents.llm.gemini_client import GeminiClient, GeminiText
+from ai_agents.llm.gemini_client import GeminiClient, GeminiText, GeminiError
 
 from .models import PaperSummary
 from .tooling import AgentTool, ToolContext, ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 # -------- Data models --------
@@ -55,10 +58,11 @@ def _coerce_paper(x: Union[PaperInput, Dict[str, object], PaperSummary]) -> Pape
     if isinstance(x, PaperInput):
         return x
     if isinstance(x, PaperSummary):
+        abstract_source = x.full_text.strip() or x.abstract
         return PaperInput(
             id=x.paper_id,
             title=x.title,
-            abstract=x.abstract,
+            abstract=abstract_source,
             url=x.url or "",
             year=x.year,
             authors=list(x.authors),
@@ -118,14 +122,29 @@ class PaperSummarizer:
                 cost_estimate=cached.cost_estimate,
             )
 
-        out = self._text.chat(
-            prompt,
-            temperature=req.temperature,
-            max_output_tokens=req.max_output_tokens,
-        )
+        try:
+            out = self._text.chat(
+                prompt,
+                temperature=req.temperature,
+                max_output_tokens=req.max_output_tokens,
+            )
+        except (GeminiError, ValueError) as exc:
+            logger.warning("Gemini summarization unavailable, using fallback: %s", exc)
+            return self._fallback_result(papers, req, titles_for_cite, citations_map, reason=str(exc))
+
+        cleaned = out.strip()
+        if not cleaned:
+            logger.warning("Gemini returned empty summary output; falling back.")
+            return self._fallback_result(
+                papers,
+                req,
+                titles_for_cite,
+                citations_map,
+                reason="LLM returned an empty response",
+            )
 
         result = SummarizeResult(
-            text=out.strip(),
+            text=cleaned,
             used_count=len(papers),
             citations=titles_for_cite,
             prompt_tokens_estimate=_estimate_prompt_tokens(len(prompt)),
@@ -214,6 +233,50 @@ Instructions:
 
         prompt += "\nPapers:\n" + context + "\n"
         return prompt, titles_for_cite, citations_map
+
+    def _fallback_result(
+        self,
+        papers: List[PaperInput],
+        req: SummarizeRequest,
+        titles_for_cite: List[str],
+        citations_map: Dict[str, str],
+        *,
+        reason: Optional[str] = None,
+    ) -> SummarizeResult:
+        if not titles_for_cite:
+            titles_for_cite = [paper.title or paper.id or f"Paper {idx}" for idx, paper in enumerate(papers, start=1)]
+        if not citations_map:
+            citations_map = {
+                f"[{idx}]": paper.url or paper.title or paper.id or f"Paper {idx}"
+                for idx, paper in enumerate(papers, start=1)
+            }
+
+        header = "LLM summary unavailable; providing heuristic synthesis instead."
+        if reason:
+            header += f" ({reason})"
+
+        if not papers:
+            lines = [header, "No papers were supplied."]
+        else:
+            lines = [header]
+            for idx, paper in enumerate(papers, start=1):
+                snippet = _truncate(paper.abstract or paper.title or "", 280) or "Abstract not available."
+                lines.append(
+                    f"{idx}. {paper.title or paper.id or f'Paper {idx}'}"
+                    f" ({paper.year or 'n.d.'}) — {snippet}"
+                )
+            if req.focus_aspect:
+                lines.append(f"Focus aspect: {req.focus_aspect}.")
+            lines.append("Use these bullets until the full AI summary becomes available.")
+
+        return SummarizeResult(
+            text="\n".join(lines),
+            used_count=len(papers),
+            citations=titles_for_cite,
+            prompt_tokens_estimate=0,
+            citations_map=citations_map,
+            cost_estimate=None,
+        )
 
 
 # -------- Tool wrappers --------

@@ -1,0 +1,75 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 4615 >> stream
+BT
+/F1 12 Tf
+1 0 0 1 50 760 Tm (Summary - Focus: deep learning and give me a summary) Tj
+1 0 0 1 50 746 Tm () Tj
+1 0 0 1 50 732 Tm (LLM summary unavailable; providing heuristic synthesis instead. \(Gemini REST error:) Tj
+1 0 0 1 50 718 Tm ({"error": {"code": 400, "message": "* GenerateContentRequest.safety_settings[2]: element) Tj
+1 0 0 1 50 704 Tm (predicate failed: $.category in \(HarmCategory.HARM_CATEGORY_HATE_SPEECH,) Tj
+1 0 0 1 50 690 Tm (HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,) Tj
+1 0 0 1 50 676 Tm (HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT,) Tj
+1 0 0 1 50 662 Tm (HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY\)\\n* GenerateContentRequest.safety_settings[3]:) Tj
+1 0 0 1 50 648 Tm (element predicate failed: $.category in \(HarmCategory.HARM_CATEGORY_HATE_SPEECH,) Tj
+1 0 0 1 50 634 Tm (HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,) Tj
+1 0 0 1 50 620 Tm (HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT,) Tj
+1 0 0 1 50 606 Tm (HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY\)\\n", "status": "INVALID_ARGUMENT"}}\)) Tj
+1 0 0 1 50 592 Tm (1. PyTorch: An Imperative Style, High-Performance Deep Learning Library \(2022\) — Deep) Tj
+1 0 0 1 50 578 Tm (learning frameworks have often focused on either usability or speed, but not both. PyTorch) Tj
+1 0 0 1 50 564 Tm (is a machine learning library that shows that these two goals are in fact compatible: it) Tj
+1 0 0 1 50 550 Tm (provides an imperative and Pythonic programming style that supports code as a model, makes) Tj
+1 0 0 1 50 536 Tm (d...) Tj
+1 0 0 1 50 522 Tm (2. nnU-Net: a self-configuring method for deep learning-based biomedical image) Tj
+1 0 0 1 50 508 Tm (segmentation \(2020\) — nnU-Net: a self-configuring method for deep learning-based) Tj
+1 0 0 1 50 494 Tm (biomedical image segmentation) Tj
+1 0 0 1 50 480 Tm (3. Review of deep learning: concepts, CNN architectures, challenges, applications, future) Tj
+1 0 0 1 50 466 Tm (directions \(2021\) — Abstract In the last few years, the deep learning \(DL\) computing) Tj
+1 0 0 1 50 452 Tm (paradigm has been deemed the Gold Standard in the machine learning \(ML\) community.) Tj
+1 0 0 1 50 438 Tm (Moreover, it has gradually become the most widely used computational approach in the field) Tj
+1 0 0 1 50 424 Tm (of ML, thus achieving outstanding resu...) Tj
+1 0 0 1 50 410 Tm (4. Machine learning and deep learning \(2021\) — Machine learning and deep learning) Tj
+1 0 0 1 50 396 Tm (5. Deep Learning for Anomaly Detection \(2021\) — Anomaly detection, a.k.a. outlier) Tj
+1 0 0 1 50 382 Tm (detection or novelty detection, has been a lasting yet active research area in various) Tj
+1 0 0 1 50 368 Tm (research communities for several decades. There are still some unique problem complexities) Tj
+1 0 0 1 50 354 Tm (and challenges that require advanced approaches. In recent years,...) Tj
+1 0 0 1 50 340 Tm (6. Ensemble deep learning: A review \(2022\) — Ensemble deep learning: A review) Tj
+1 0 0 1 50 326 Tm (7. A Deep Learning Approach to Antibiotic Discovery \(2020\) — A Deep Learning Approach to) Tj
+1 0 0 1 50 312 Tm (Antibiotic Discovery) Tj
+1 0 0 1 50 298 Tm (8. What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision? \(2022\) —) Tj
+1 0 0 1 50 284 Tm (There are two major types of uncertainty one can model. Aleatoric uncertainty captures) Tj
+1 0 0 1 50 270 Tm (noise inherent in the observations. On the other hand, epistemic uncertainty accounts for) Tj
+1 0 0 1 50 256 Tm (uncertainty in the model -- uncertainty which can be explained away given enough data.) Tj
+1 0 0 1 50 242 Tm (Traditionally...) Tj
+1 0 0 1 50 228 Tm (Focus aspect: deep learning and give me a summary.) Tj
+1 0 0 1 50 214 Tm (Use these bullets until the full AI summary becomes available.) Tj
+1 0 0 1 50 200 Tm () Tj
+1 0 0 1 50 186 Tm (References:) Tj
+1 0 0 1 50 172 Tm (1. PyTorch: An Imperative Style, High-Performance Deep Learning Library) Tj
+1 0 0 1 50 158 Tm (2. nnU-Net: a self-configuring method for deep learning-based biomedical image) Tj
+1 0 0 1 50 144 Tm (segmentation) Tj
+1 0 0 1 50 130 Tm (3. Review of deep learning: concepts, CNN architectures, challenges, applications, future) Tj
+1 0 0 1 50 116 Tm (directions) Tj
+1 0 0 1 50 102 Tm (4. Machine learning and deep learning) Tj
+1 0 0 1 50 88 Tm (5. Deep Learning for Anomaly Detection) Tj
+1 0 0 1 50 74 Tm (6. Ensemble deep learning: A review) Tj
+1 0 0 1 50 60 Tm (7. A Deep Learning Approach to Antibiotic Discovery) Tj
+1 0 0 1 50 760 Tm (8. What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision?) Tj
+ET
+endstream endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+4977
+%%EOF

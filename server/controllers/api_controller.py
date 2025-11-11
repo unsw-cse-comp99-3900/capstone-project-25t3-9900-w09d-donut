@@ -10,6 +10,8 @@ from server.data_access.search_history_repository import SearchHistoryRepository
 from server.data_access.conversation_repository import ConversationRepository
 from server.data_access.summary_repository import SummaryRepository
 from server.services.academic_search import AcademicSearchService, search_openalex_papers
+from server.services.docling_service import DoclingIngestionService
+from server.services.pdf_cache_service import PDFCacheService
 from server.services.ai_conversation_service import AIConversationService
 from server.services.orchestration_service import OrchestrationService
 from server.services.auth_service import register_user, login_user
@@ -22,9 +24,13 @@ api_blueprint = Blueprint("api", __name__)
 orchestration_service = OrchestrationService()
 paper_repository = PaperRepository()
 search_history_repository = SearchHistoryRepository()
+pdf_cache_service = PDFCacheService()
+docling_service = DoclingIngestionService(paper_repository=paper_repository)
 academic_search_service = AcademicSearchService(
     paper_repository=paper_repository,
     history_repository=search_history_repository,
+    docling_service=docling_service,
+    pdf_cache_service=pdf_cache_service,
 )
 conversation_service = AIConversationService(
     paper_repository=paper_repository,
@@ -174,6 +180,7 @@ def get_search_history(history_id: int):
     if not record or record.get("user_id") not in (None, user_id):
         return jsonify({"error": "History not found"}), 404
     record.pop("filters_json", None)
+    enrich_fulltext_metadata(record)
     return jsonify({"history": record}), 200
 
 
@@ -232,6 +239,18 @@ def sync_history_selection(history_id: int):
     else:
         return jsonify({"error": "Missing selection payload"}), 400
     return jsonify({"detail": "selection updated"}), 200
+
+
+def enrich_fulltext_metadata(record: dict) -> None:
+    papers = record.get("papers") or []
+    ids = [paper.get("paper_id") for paper in papers if paper.get("paper_id")]
+    fulltext_map = paper_repository.fetch_fulltext_map(ids)
+    for paper in papers:
+        payload = fulltext_map.get(paper.get("paper_id"))
+        if not payload:
+            continue
+        paper["full_text"] = payload.get("plain_text")
+        paper["structured_sections"] = payload.get("structured_sections")
 
 
 @api_blueprint.post("/chat/sessions")
