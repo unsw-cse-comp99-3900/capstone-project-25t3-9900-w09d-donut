@@ -167,12 +167,6 @@ class PaperSummarizer:
             "outline": "Return a short outline with hierarchical bullet points.",
         }.get(req.style, "Return a concise bulleted list (3-8 bullets).")
 
-        cite_line = (
-            "When referencing evidence, append bracket citations using the numbered titles, e.g., [1], [2]."
-            if req.include_citations
-            else "Do not include bracket citations."
-        )
-
         language_line = "Respond in English."
         if req.language.lower().startswith("zh"):
             language_line = "Respond in Chinese."
@@ -194,7 +188,22 @@ class PaperSummarizer:
         titles_for_cite: List[str] = []
         citations_map: Dict[str, str] = {}
 
-        for idx, paper in enumerate(papers, start=1):
+        paper_list = list(papers)
+        include_citations = req.include_citations and len(paper_list) > 1
+        cite_line = (
+            "When referencing evidence, append bracket citations using the numbered titles, e.g., [1], [2]."
+            if include_citations
+            else "Do not include bracket citations."
+        )
+
+        logger.info(
+            "Building summary prompt for %s papers | mode=%s focus=%s",
+            len(paper_list),
+            req.mode,
+            req.focus_aspect,
+        )
+
+        for idx, paper in enumerate(paper_list, start=1):
             title = paper.title.strip() or f"Paper {idx}"
             abstract = _truncate(paper.abstract or "", req.max_abstract_chars)
             year = f"{paper.year}" if paper.year is not None else "N/A"

@@ -44,6 +44,9 @@ class SessionMemory:
     def get_artifact(self, name: str) -> Optional[str]:
         return self.session.artifacts.get(name)
 
+    def clear_artifact(self, name: str) -> None:
+        self.session.artifacts.pop(name, None)
+
     def append_summary(self, fragment: str, max_fragments: int = 12) -> None:
         fragment = fragment.strip()
         if not fragment:

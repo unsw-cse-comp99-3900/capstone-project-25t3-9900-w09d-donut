@@ -134,6 +134,7 @@ const ResearchPlanner = () => {
   const [chatError, setChatError] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [selectedPaperIds, setSelectedPaperIds] = useState([]);
+  const [refreshingStatus, setRefreshingStatus] = useState(false);
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -191,6 +192,8 @@ const ResearchPlanner = () => {
         link: item.link || item.url || paperId,
         pdf_url: item.pdf_url || item.pdf || '',
         selected: item.selected !== undefined ? Boolean(item.selected) : true,
+        full_text: item.full_text || '',
+        structured_sections: item.structured_sections || {},
       };
     });
 
@@ -220,6 +223,20 @@ const ResearchPlanner = () => {
       console.error(historyErr);
       setChatError(historyErr?.response?.data?.error || 'Unable to refresh paper selection.');
       return null;
+    }
+  };
+
+  const handleRefreshStatuses = async () => {
+    if (!activeHistoryId) {
+      return;
+    }
+    setRefreshingStatus(true);
+    try {
+      await fetchHistoryDetails(activeHistoryId);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRefreshingStatus(false);
     }
   };
 
@@ -396,8 +413,9 @@ const ResearchPlanner = () => {
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!chatInput.trim()) {
+  const sendChatMessage = async (rawMessage, options = {}) => {
+    const trimmed = (rawMessage || '').trim();
+    if (!trimmed) {
       return;
     }
     if (!activeHistoryId) {
@@ -423,7 +441,7 @@ const ResearchPlanner = () => {
       const response = await axios.post(
         `${API_BASE_URL}/api/chat/sessions/${sessionId}/messages`,
         {
-          message: chatInput.trim(),
+          message: trimmed,
           user_email: email,
         },
         {
@@ -431,7 +449,9 @@ const ResearchPlanner = () => {
         }
       );
       setChatMessages(response.data.messages || []);
-      setChatInput('');
+      if (options.clearInput) {
+        setChatInput('');
+      }
       if (Array.isArray(response.data.selected_ids)) {
         setSelectedPaperIds(response.data.selected_ids);
       }
@@ -444,6 +464,22 @@ const ResearchPlanner = () => {
     } finally {
       setChatLoading(false);
     }
+  };
+
+  const handleSendMessage = async () => {
+    if (!chatInput.trim()) {
+      return;
+    }
+    await sendChatMessage(chatInput, { clearInput: true });
+  };
+
+  const handleSummaryCandidateClick = async (candidate, index) => {
+    if (chatLoading || !candidate) {
+      return;
+    }
+    const identifier = candidate.paper_id || candidate.short_id || `paper ${index + 1}`;
+    const prompt = `Summarize ${identifier}`;
+    await sendChatMessage(prompt);
   };
 
   return (
@@ -641,6 +677,15 @@ const ResearchPlanner = () => {
             >
               {showHistory ? 'Hide History' : 'Show History'}
             </Button>
+            <Button
+              variant="text"
+              size="small"
+              sx={{ ml: 1 }}
+              disabled={!activeHistoryId || refreshingStatus}
+              onClick={handleRefreshStatuses}
+            >
+              {refreshingStatus ? 'Refreshing…' : 'Refresh Parsed Status'}
+            </Button>
             {showHistory && (
               <Card variant="outlined" sx={{ mt: 2, p: 2, maxHeight: 300, overflowY: 'auto' }}>
                 <Typography variant="h6" gutterBottom>
@@ -751,34 +796,86 @@ const ResearchPlanner = () => {
                           : 'Sign in and run a search to enable the AI conversation experience.'}
                       </Typography>
                     ) : (
-                      chatMessages.map((msg, index) => (
-                        <Box
-                          key={`${msg.role}-${index}-${msg.created_at || index}`}
-                          sx={{
-                            mb: 1.5,
-                            textAlign: msg.role === 'user' ? 'right' : 'left',
-                          }}
-                        >
-                          <Typography variant="caption" color="text.secondary">
-                            {msg.role === 'user' ? 'You' : 'Assistant'}
-                          </Typography>
-                          <Typography
-                            variant="body2"
+                      chatMessages.map((msg, index) => {
+                        const isUser = msg.role === 'user';
+                        const rawMetadata = msg.metadata?.metadata || msg.metadata || {};
+                        const summaryCandidates = !isUser && Array.isArray(rawMetadata.summary_candidates) ? rawMetadata.summary_candidates : [];
+                        const summaryPending = !isUser && (rawMetadata.summary_pending || summaryCandidates.length > 0);
+                        return (
+                          <Box
+                            key={`${msg.role}-${index}-${msg.created_at || index}`}
                             sx={{
-                              display: 'inline-block',
-                              px: 1.5,
-                              py: 1,
-                              borderRadius: 2,
-                              bgcolor: msg.role === 'user' ? 'primary.light' : 'grey.200',
-                              color: 'text.primary',
-                              whiteSpace: 'pre-line',
-                              mt: 0.5,
+                              mb: 1.5,
+                              textAlign: isUser ? 'right' : 'left',
                             }}
                           >
-                            {msg.content}
-                          </Typography>
-                        </Box>
-                      ))
+                            <Typography variant="caption" color="text.secondary">
+                              {isUser ? 'You' : 'Assistant'}
+                            </Typography>
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                display: 'inline-block',
+                                px: 1.5,
+                                py: 1,
+                                borderRadius: 2,
+                                bgcolor: isUser ? 'primary.light' : 'grey.200',
+                                color: 'text.primary',
+                                whiteSpace: 'pre-line',
+                                mt: 0.5,
+                              }}
+                            >
+                              {msg.content}
+                            </Typography>
+                            {!isUser && summaryCandidates.length > 0 && (
+                              <Box sx={{ mt: 1.5, textAlign: 'left' }}>
+                                <Typography variant="caption" color="text.secondary">
+                                  Choose a parsed paper to summarize:
+                                </Typography>
+                                <Stack spacing={1} sx={{ mt: 1 }}>
+                                  {summaryCandidates.map((candidate, candidateIndex) => {
+                                    const position = candidate.position || candidateIndex + 1;
+                                    const source = candidate.source || 'Unknown venue';
+                                    const year = candidate.year ? `${candidate.year}` : null;
+                                    const descriptor = [year, source].filter(Boolean).join(' · ');
+                                    return (
+                                      <Card variant="outlined" key={`${candidate.paper_id || candidate.short_id || candidateIndex}`}>
+                                        <CardContent sx={{ py: 1.5 }}>
+                                          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                                            {position}. {candidate.title || candidate.short_id || 'Untitled'}
+                                          </Typography>
+                                          {descriptor && (
+                                            <Typography variant="body2" color="text.secondary">
+                                              {descriptor}
+                                            </Typography>
+                                          )}
+                                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                                            ID: {candidate.short_id || candidate.paper_id}
+                                          </Typography>
+                                          <Button
+                                            size="small"
+                                            sx={{ mt: 1 }}
+                                            variant="contained"
+                                            onClick={() => handleSummaryCandidateClick(candidate, candidateIndex)}
+                                            disabled={!canChat || chatLoading}
+                                          >
+                                            Summarize this paper
+                                          </Button>
+                                        </CardContent>
+                                      </Card>
+                                    );
+                                  })}
+                                </Stack>
+                              </Box>
+                            )}
+                            {!isUser && summaryPending && summaryCandidates.length === 0 && (
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                                Waiting for parsed papers. As soon as text is available, selectable options will appear here.
+                              </Typography>
+                            )}
+                          </Box>
+                        );
+                      })
                     )}
                   </Box>
 
@@ -850,13 +947,13 @@ const ResearchPlanner = () => {
                         </TableCell>
                         <TableCell>{row.source || '-'}</TableCell>
                         <TableCell>{row.cited_by_count || 0}</TableCell>
-                        <TableCell>
-                          {isSelected ? (
-                            <Chip label="In scope" color="success" size="small" />
-                          ) : (
-                            <Chip label="Dropped" variant="outlined" size="small" />
-                          )}
-                        </TableCell>
+                    <TableCell>
+                      {row.full_text ? (
+                        <Chip label="Parsed" color="success" size="small" />
+                      ) : (
+                        <Chip label="Not Parsed" color="warning" size="small" />
+                      )}
+                    </TableCell>
                         <TableCell>
                           {row.pdf_url ? (
                             <MuiLink href={row.pdf_url} target="_blank" rel="noopener">

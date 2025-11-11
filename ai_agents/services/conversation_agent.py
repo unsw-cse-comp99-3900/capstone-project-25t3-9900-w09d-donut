@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Any
@@ -38,6 +39,7 @@ class InsightGenerator(Protocol):
 class ParsedIntent:
     action: str
     target_ids: List[str] = field(default_factory=list)
+    explicit_targets: bool = False
     keywords: List[str] = field(default_factory=list)
     years: Optional[int] = None
     limit: Optional[int] = None
@@ -97,20 +99,29 @@ class NaturalLanguageInterpreter:
             return ParsedIntent(action="keyword_expand", keywords=keywords, request_expansion=True)
 
         if any(term in lower for term in ["overall summary", "global summary"]):
-            return ParsedIntent(action="global_summary", target_ids=list(session.selected_ids))
+            return ParsedIntent(action="global_summary", target_ids=list(session.selected_ids), explicit_targets=bool(session.selected_ids))
 
         if any(term in lower for term in ["focus on", "focus around", "regarding"]):
             focus = self._extract_focus_aspect(message)
             targets = self._resolve_targets(message, session)
-            return ParsedIntent(action="focused_summary", target_ids=targets or list(session.selected_ids), focus_aspect=focus or "the requested aspect")
+            return ParsedIntent(
+                action="focused_summary",
+                target_ids=targets or list(session.selected_ids),
+                explicit_targets=bool(targets),
+                focus_aspect=focus or "the requested aspect",
+            )
 
         if any(term in lower for term in ["cite", "citation", "references"]):
             targets = self._resolve_targets(message, session)
-            return ParsedIntent(action="cite", target_ids=targets or list(session.selected_ids))
+            return ParsedIntent(action="cite", target_ids=targets or list(session.selected_ids), explicit_targets=bool(targets))
 
         if any(term in lower for term in ["summary", "summarize"]):
             targets = self._resolve_targets(message, session)
-            return ParsedIntent(action="quick_summary", target_ids=targets or list(session.selected_ids))
+            return ParsedIntent(
+                action="quick_summary",
+                target_ids=targets or list(session.selected_ids),
+                explicit_targets=bool(targets),
+            )
 
         years = self._extract_year_window(lower)
         if years is not None:
@@ -290,6 +301,9 @@ class SimpleInsightGenerator:
 class ConversationAgent:
     """Coordinates multi-turn conversations and tool execution."""
 
+    SUMMARY_CANDIDATE_ARTIFACT = "pending_summary_candidates"
+    SUMMARY_CANDIDATE_DISPLAY_LIMIT = 6
+
     def __init__(
         self,
         *,
@@ -350,7 +364,17 @@ class ConversationAgent:
         memory = self._memory[session_id]
 
         memory.add_user_message(message)
-        parsed = self._interpreter.parse(message, session)
+        pending_choice = self._try_consume_summary_choice(session, memory, message)
+        if pending_choice:
+            preferred_language = session.filters.get("language") if isinstance(session.filters.get("language"), str) else "en"
+            parsed = ParsedIntent(
+                action="quick_summary",
+                target_ids=[pending_choice],
+                explicit_targets=True,
+                language=preferred_language or "en",
+            )
+        else:
+            parsed = self._interpreter.parse(message, session)
         intent_payload = {
             "target_ids": parsed.target_ids,
             "keywords": parsed.keywords,
@@ -385,6 +409,7 @@ class ConversationAgent:
             parsed = ParsedIntent(
                 action="quick_summary",
                 target_ids=list(session.selected_ids),
+                explicit_targets=bool(session.selected_ids),
                 language=language,
             )
         elif summary_key in {"focused", "focus"}:
@@ -393,6 +418,7 @@ class ConversationAgent:
             parsed = ParsedIntent(
                 action="focused_summary",
                 target_ids=list(session.selected_ids),
+                explicit_targets=bool(session.selected_ids),
                 focus_aspect=focus_aspect,
                 language=language,
             )
@@ -400,6 +426,7 @@ class ConversationAgent:
             parsed = ParsedIntent(
                 action="global_summary",
                 target_ids=list(session.selected_ids),
+                explicit_targets=bool(session.selected_ids),
                 language=language,
             )
 
@@ -489,15 +516,25 @@ class ConversationAgent:
         )
 
     def _handle_quick_summary(self, session: ConversationSession, memory: SessionMemory, parsed: ParsedIntent) -> AgentReply:
+        ready_papers = self._list_ready_papers()
+        if not parsed.explicit_targets:
+            return self._reply_with_summary_candidates(session, memory, ready_papers)
+
         target_ids = parsed.target_ids or list(session.selected_ids)
-        papers = self._search_manager.bulk_get(target_ids)
-        if not papers:
-            return AgentReply(text="No papers available for summarization.", selected_ids=list(session.selected_ids), citations=[])
+        ready_lookup = {paper.paper_id: paper for paper in ready_papers}
+        selected_ready = [ready_lookup[pid] for pid in target_ids if pid in ready_lookup]
+        missing_ids = [pid for pid in target_ids if pid not in ready_lookup]
+
+        if not selected_ready:
+            return self._reply_with_summary_candidates(session, memory, ready_papers, missing_ids=missing_ids)
+
+        resolved_ids = [paper.paper_id for paper in selected_ready]
+        memory.clear_artifact(self.SUMMARY_CANDIDATE_ARTIFACT)
 
         payload = {
-            "papers": papers,
+            "papers": selected_ready,
             "user_goal": "Provide a concise summary of the selected papers.",
-            "selected_ids": target_ids,
+            "selected_ids": resolved_ids,
             "language": parsed.language,
         }
         result = self._run_tool(session, memory, "quick_summary", payload)
@@ -711,6 +748,162 @@ class ConversationAgent:
         return AgentReply(text=text, selected_ids=list(session.selected_ids), citations=citations)
 
     # ----------------------------- helpers -------------------------------- #
+
+    def _reply_with_summary_candidates(
+        self,
+        session: ConversationSession,
+        memory: SessionMemory,
+        ready_papers: Sequence[PaperSummary],
+        *,
+        missing_ids: Optional[Sequence[str]] = None,
+    ) -> AgentReply:
+        missing_ids = list(dict.fromkeys(missing_ids or []))
+        if not ready_papers:
+            memory.clear_artifact(self.SUMMARY_CANDIDATE_ARTIFACT)
+            text = "I have not finished parsing any of the downloaded PDFs yet. Please wait until at least one paper shows parsed text."
+            if missing_ids:
+                missing_display = ", ".join(self._short_paper_id(pid) for pid in missing_ids)
+                text = f"I could not find parsed text for: {missing_display}. {text}"
+            metadata = {"summary_candidates": [], "summary_pending": True}
+            return AgentReply(text=text, selected_ids=list(session.selected_ids), citations=[], metadata=metadata)
+
+        candidate_payload = self._serialize_summary_candidates(ready_papers)
+        try:
+            memory.store_artifact(self.SUMMARY_CANDIDATE_ARTIFACT, json.dumps(candidate_payload))
+        except TypeError:
+            memory.store_artifact(self.SUMMARY_CANDIDATE_ARTIFACT, "")
+
+        lines: List[str] = []
+        if missing_ids:
+            missing_display = ", ".join(self._short_paper_id(pid) for pid in missing_ids)
+            lines.append(f"I do not yet have parsed text for: {missing_display}.")
+        lines.append("Here are the parsed papers ready for summarization. Reply with the number or paper ID to choose one:")
+        preview = list(ready_papers[: self.SUMMARY_CANDIDATE_DISPLAY_LIMIT])
+        for idx, paper in enumerate(preview, start=1):
+            lines.append(f"{idx}. {self._describe_paper_for_listing(paper)}")
+        remaining = len(ready_papers) - len(preview)
+        if remaining > 0:
+            lines.append(f"...and {remaining} more parsed paper(s). You can reference them by ID.")
+        metadata = {"summary_candidates": candidate_payload, "summary_pending": True}
+        return AgentReply(text="\n".join(lines), selected_ids=list(session.selected_ids), citations=[], metadata=metadata)
+
+    def _list_ready_papers(self) -> List[PaperSummary]:
+        catalogue = self._search_manager.list_catalogue()
+        return [paper for paper in catalogue if self._paper_has_ready_text(paper)]
+
+    @staticmethod
+    def _paper_has_ready_text(paper: PaperSummary) -> bool:
+        if paper.full_text and paper.full_text.strip():
+            return True
+        for section in paper.sections or []:
+            if isinstance(section, Mapping):
+                text = section.get("text") or section.get("content")
+                if isinstance(text, str) and text.strip():
+                    return True
+        metadata_sections = paper.metadata.get("structured_sections")
+        if isinstance(metadata_sections, Sequence):
+            for section in metadata_sections:
+                if isinstance(section, Mapping):
+                    text = section.get("text") or section.get("content")
+                    if isinstance(text, str) and text.strip():
+                        return True
+        return False
+
+    def _serialize_summary_candidates(self, papers: Sequence[PaperSummary]) -> List[Dict[str, object]]:
+        items: List[Dict[str, object]] = []
+        for idx, paper in enumerate(papers, start=1):
+            source = ""
+            if isinstance(paper.metadata, Mapping):
+                source = paper.metadata.get("venue") or paper.metadata.get("journal") or paper.metadata.get("source") or ""
+            short_id = self._short_paper_id(paper.paper_id)
+            items.append(
+                {
+                    "paper_id": paper.paper_id,
+                    "short_id": short_id,
+                    "title": paper.title,
+                    "year": paper.year,
+                    "source": source,
+                    "position": idx,
+                }
+            )
+        return items
+
+    def _describe_paper_for_listing(self, paper: PaperSummary) -> str:
+        title = paper.title or "Untitled paper"
+        meta_parts: List[str] = []
+        if paper.year:
+            meta_parts.append(str(paper.year))
+        if isinstance(paper.metadata, Mapping):
+            venue = paper.metadata.get("venue") or paper.metadata.get("journal") or paper.metadata.get("source")
+            if venue:
+                meta_parts.append(str(venue))
+        meta = f" ({' / '.join(meta_parts)})" if meta_parts else ""
+        return f"{title}{meta} — {self._short_paper_id(paper.paper_id)}"
+
+    def _try_consume_summary_choice(self, session: ConversationSession, memory: SessionMemory, message: str) -> Optional[str]:
+        artifact = memory.get_artifact(self.SUMMARY_CANDIDATE_ARTIFACT)
+        if not artifact:
+            return None
+        try:
+            candidates = json.loads(artifact) if artifact else []
+        except json.JSONDecodeError:
+            memory.clear_artifact(self.SUMMARY_CANDIDATE_ARTIFACT)
+            return None
+        if not isinstance(candidates, list):
+            return None
+        choice = self._match_candidate_choice(message, candidates)
+        if choice:
+            memory.clear_artifact(self.SUMMARY_CANDIDATE_ARTIFACT)
+        return choice
+
+    def _match_candidate_choice(self, message: str, candidates: Sequence[Mapping[str, object]]) -> Optional[str]:
+        if not message:
+            return None
+        text = message.strip().lower()
+        if not text:
+            return None
+
+        ordinal_map = NaturalLanguageInterpreter.ORDINAL_MAP
+        for word, index in ordinal_map.items():
+            if word in text and 1 <= index <= len(candidates):
+                candidate = candidates[index - 1]
+                paper_id = candidate.get("paper_id")
+                if isinstance(paper_id, str):
+                    return paper_id
+
+        pattern = re.search(r"(?:paper|option|choice|#)\s*(\d{1,2})", text)
+        if pattern:
+            idx = int(pattern.group(1))
+            if 1 <= idx <= len(candidates):
+                candidate = candidates[idx - 1]
+                paper_id = candidate.get("paper_id")
+                if isinstance(paper_id, str):
+                    return paper_id
+
+        standalone_number = re.fullmatch(r"\d{1,2}", text)
+        if standalone_number:
+            idx = int(standalone_number.group(0))
+            if 1 <= idx <= len(candidates):
+                candidate = candidates[idx - 1]
+                paper_id = candidate.get("paper_id")
+                if isinstance(paper_id, str):
+                    return paper_id
+
+        for candidate in candidates:
+            short_id = candidate.get("short_id")
+            if isinstance(short_id, str) and short_id.lower() in text:
+                paper_id = candidate.get("paper_id")
+                if isinstance(paper_id, str):
+                    return paper_id
+            paper_id = candidate.get("paper_id")
+            if isinstance(paper_id, str) and paper_id.lower() in text:
+                return paper_id
+
+        return None
+
+    @staticmethod
+    def _short_paper_id(paper_id: str) -> str:
+        return paper_id.rsplit("/", 1)[-1] if "/" in paper_id else paper_id
 
     def _run_tool(self, session: ConversationSession, memory: SessionMemory, tool_name: str, payload: Dict[str, object]) -> ToolResult:
         extras: Dict[str, object] = {"selected_ids": list(session.selected_ids)}
