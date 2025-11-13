@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import uuid
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional, Union, cast
 
@@ -24,6 +26,7 @@ class PaperInput:
     year: Optional[int] = None
     authors: Optional[List[str]] = None
     concepts: Optional[List[str]] = None
+    full_text: str = ""
 
 
 @dataclass
@@ -34,6 +37,7 @@ class SummarizeRequest:
     include_citations: bool = True
     max_items: int = 8
     max_abstract_chars: int = 1200
+    max_full_text_chars: int = 60000
     temperature: float = 0.4
     max_output_tokens: int = 1024
     mode: str = "quick"  # quick | global | focused | comprehensive
@@ -58,7 +62,7 @@ def _coerce_paper(x: Union[PaperInput, Dict[str, object], PaperSummary]) -> Pape
     if isinstance(x, PaperInput):
         return x
     if isinstance(x, PaperSummary):
-        abstract_source = x.full_text.strip() or x.abstract
+        abstract_source = x.abstract
         return PaperInput(
             id=x.paper_id,
             title=x.title,
@@ -66,6 +70,7 @@ def _coerce_paper(x: Union[PaperInput, Dict[str, object], PaperSummary]) -> Pape
             url=x.url or "",
             year=x.year,
             authors=list(x.authors),
+            full_text=x.full_text,
         )
     data = cast(Mapping[str, object], x)
     return PaperInput(
@@ -76,6 +81,7 @@ def _coerce_paper(x: Union[PaperInput, Dict[str, object], PaperSummary]) -> Pape
         year=data.get("year"),  # type: ignore[arg-type]
         authors=list(data.get("authors", [])) if data.get("authors") else None,  # type: ignore[arg-type]
         concepts=list(data.get("concepts", [])) if data.get("concepts") else None,  # type: ignore[arg-type]
+        full_text=str(data.get("full_text", "")),
     )
 
 
@@ -109,6 +115,16 @@ class PaperSummarizer:
     def summarize(self, req: SummarizeRequest) -> SummarizeResult:
         papers = [_coerce_paper(p) for p in req.papers][: max(1, req.max_items)]
         prompt, titles_for_cite, citations_map = self._build_prompt(papers, req)
+
+                # --- BEGIN DEBUG ---
+        prompts_dir = os.path.join("storage", "prompts")
+        os.makedirs(prompts_dir, exist_ok=True)
+        prompt_filename = f"{uuid.uuid4()}.txt"
+        prompt_filepath = os.path.join(prompts_dir, prompt_filename)
+        with open(prompt_filepath, "w", encoding="utf-8") as f:
+            f.write(prompt)
+        print(f">>> [DEBUG] Prompt saved to: {prompt_filepath} <<<")
+        # --- END DEBUG ---
 
         cache_key = _hash_prompt(prompt + req.mode + req.style + (req.focus_aspect or "") + (req.system_prompt or ""))
         if self._enable_cache and cache_key in self._cache:
@@ -206,6 +222,7 @@ class PaperSummarizer:
         for idx, paper in enumerate(paper_list, start=1):
             title = paper.title.strip() or f"Paper {idx}"
             abstract = _truncate(paper.abstract or "", req.max_abstract_chars)
+            full_text = _truncate(paper.full_text or "", req.max_full_text_chars)
             year = f"{paper.year}" if paper.year is not None else "N/A"
             url = paper.url or ""
             authors = ", ".join(paper.authors or [])[:200]
@@ -216,13 +233,15 @@ class PaperSummarizer:
                 f"Authors: {authors}\n"
                 f"Abstract: {abstract}\n"
             )
+            if full_text:
+                block += f"FullText: {full_text}\n"
             items.append(block)
             titles_for_cite.append(title)
             citations_map[f"[{idx}]"] = url or title
 
         context = "\n\n".join(items)
 
-        prompt = f"""You are an academic assistant.
+        prompt = f'''You are an academic assistant.
 Overall task: {req.user_goal}
 
 Instructions:
@@ -233,7 +252,7 @@ Instructions:
 - {cite_line}
 - {focus_line}
 
-"""
+'''
         if req.system_prompt:
             prompt = req.system_prompt.strip() + "\n\n" + prompt
 
