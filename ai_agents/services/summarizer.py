@@ -39,7 +39,7 @@ class SummarizeRequest:
     max_abstract_chars: int = 1200
     max_full_text_chars: int = 60000
     temperature: float = 0.4
-    max_output_tokens: int = 1024
+    max_output_tokens: int = 8192
     mode: str = "quick"  # quick | global | focused | comprehensive
     focus_aspect: Optional[str] = None
     language: str = "en"
@@ -146,6 +146,13 @@ class PaperSummarizer:
             )
         except (GeminiError, ValueError) as exc:
             logger.warning("Gemini summarization unavailable, using fallback: %s", exc)
+            # --- BEGIN ENHANCED DEBUG ---
+            logger.error("="*80)
+            logger.error(">>> [DEBUG] Gemini API Call Failed <<<")
+            logger.error("Full exception details:")
+            logger.error(repr(exc))
+            logger.error("="*80)
+            # --- END ENHANCED DEBUG ---
             return self._fallback_result(papers, req, titles_for_cite, citations_map, reason=str(exc))
 
         cleaned = out.strip()
