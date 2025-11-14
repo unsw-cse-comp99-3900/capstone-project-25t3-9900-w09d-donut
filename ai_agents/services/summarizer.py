@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
+import uuid
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional, Union, cast
 
-from ai_agents.llm.gemini_client import GeminiClient, GeminiText
+from ai_agents.llm.gemini_client import GeminiClient, GeminiText, GeminiError
 
 from .models import PaperSummary
 from .tooling import AgentTool, ToolContext, ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 # -------- Data models --------
@@ -21,6 +26,7 @@ class PaperInput:
     year: Optional[int] = None
     authors: Optional[List[str]] = None
     concepts: Optional[List[str]] = None
+    full_text: str = ""
 
 
 @dataclass
@@ -31,8 +37,9 @@ class SummarizeRequest:
     include_citations: bool = True
     max_items: int = 8
     max_abstract_chars: int = 1200
+    max_full_text_chars: int = 60000
     temperature: float = 0.4
-    max_output_tokens: int = 1024
+    max_output_tokens: int = 8192
     mode: str = "quick"  # quick | global | focused | comprehensive
     focus_aspect: Optional[str] = None
     language: str = "en"
@@ -55,13 +62,15 @@ def _coerce_paper(x: Union[PaperInput, Dict[str, object], PaperSummary]) -> Pape
     if isinstance(x, PaperInput):
         return x
     if isinstance(x, PaperSummary):
+        abstract_source = x.abstract
         return PaperInput(
             id=x.paper_id,
             title=x.title,
-            abstract=x.abstract,
+            abstract=abstract_source,
             url=x.url or "",
             year=x.year,
             authors=list(x.authors),
+            full_text=x.full_text,
         )
     data = cast(Mapping[str, object], x)
     return PaperInput(
@@ -72,6 +81,7 @@ def _coerce_paper(x: Union[PaperInput, Dict[str, object], PaperSummary]) -> Pape
         year=data.get("year"),  # type: ignore[arg-type]
         authors=list(data.get("authors", [])) if data.get("authors") else None,  # type: ignore[arg-type]
         concepts=list(data.get("concepts", [])) if data.get("concepts") else None,  # type: ignore[arg-type]
+        full_text=str(data.get("full_text", "")),
     )
 
 
@@ -106,6 +116,16 @@ class PaperSummarizer:
         papers = [_coerce_paper(p) for p in req.papers][: max(1, req.max_items)]
         prompt, titles_for_cite, citations_map = self._build_prompt(papers, req)
 
+                # --- BEGIN DEBUG ---
+        prompts_dir = os.path.join("storage", "prompts")
+        os.makedirs(prompts_dir, exist_ok=True)
+        prompt_filename = f"{uuid.uuid4()}.txt"
+        prompt_filepath = os.path.join(prompts_dir, prompt_filename)
+        with open(prompt_filepath, "w", encoding="utf-8") as f:
+            f.write(prompt)
+        print(f">>> [DEBUG] Prompt saved to: {prompt_filepath} <<<")
+        # --- END DEBUG ---
+
         cache_key = _hash_prompt(prompt + req.mode + req.style + (req.focus_aspect or "") + (req.system_prompt or ""))
         if self._enable_cache and cache_key in self._cache:
             cached = self._cache[cache_key]
@@ -118,14 +138,36 @@ class PaperSummarizer:
                 cost_estimate=cached.cost_estimate,
             )
 
-        out = self._text.chat(
-            prompt,
-            temperature=req.temperature,
-            max_output_tokens=req.max_output_tokens,
-        )
+        try:
+            out = self._text.chat(
+                prompt,
+                temperature=req.temperature,
+                max_output_tokens=req.max_output_tokens,
+            )
+        except (GeminiError, ValueError) as exc:
+            logger.warning("Gemini summarization unavailable, using fallback: %s", exc)
+            # --- BEGIN ENHANCED DEBUG ---
+            logger.error("="*80)
+            logger.error(">>> [DEBUG] Gemini API Call Failed <<<")
+            logger.error("Full exception details:")
+            logger.error(repr(exc))
+            logger.error("="*80)
+            # --- END ENHANCED DEBUG ---
+            return self._fallback_result(papers, req, titles_for_cite, citations_map, reason=str(exc))
+
+        cleaned = out.strip()
+        if not cleaned:
+            logger.warning("Gemini returned empty summary output; falling back.")
+            return self._fallback_result(
+                papers,
+                req,
+                titles_for_cite,
+                citations_map,
+                reason="LLM returned an empty response",
+            )
 
         result = SummarizeResult(
-            text=out.strip(),
+            text=cleaned,
             used_count=len(papers),
             citations=titles_for_cite,
             prompt_tokens_estimate=_estimate_prompt_tokens(len(prompt)),
@@ -148,12 +190,6 @@ class PaperSummarizer:
             "outline": "Return a short outline with hierarchical bullet points.",
         }.get(req.style, "Return a concise bulleted list (3-8 bullets).")
 
-        cite_line = (
-            "When referencing evidence, append bracket citations using the numbered titles, e.g., [1], [2]."
-            if req.include_citations
-            else "Do not include bracket citations."
-        )
-
         language_line = "Respond in English."
         if req.language.lower().startswith("zh"):
             language_line = "Respond in Chinese."
@@ -175,9 +211,25 @@ class PaperSummarizer:
         titles_for_cite: List[str] = []
         citations_map: Dict[str, str] = {}
 
-        for idx, paper in enumerate(papers, start=1):
+        paper_list = list(papers)
+        include_citations = req.include_citations and len(paper_list) > 1
+        cite_line = (
+            "When referencing evidence, append bracket citations using the numbered titles, e.g., [1], [2]."
+            if include_citations
+            else "Do not include bracket citations."
+        )
+
+        logger.info(
+            "Building summary prompt for %s papers | mode=%s focus=%s",
+            len(paper_list),
+            req.mode,
+            req.focus_aspect,
+        )
+
+        for idx, paper in enumerate(paper_list, start=1):
             title = paper.title.strip() or f"Paper {idx}"
             abstract = _truncate(paper.abstract or "", req.max_abstract_chars)
+            full_text = _truncate(paper.full_text or "", req.max_full_text_chars)
             year = f"{paper.year}" if paper.year is not None else "N/A"
             url = paper.url or ""
             authors = ", ".join(paper.authors or [])[:200]
@@ -188,13 +240,15 @@ class PaperSummarizer:
                 f"Authors: {authors}\n"
                 f"Abstract: {abstract}\n"
             )
+            if full_text:
+                block += f"FullText: {full_text}\n"
             items.append(block)
             titles_for_cite.append(title)
             citations_map[f"[{idx}]"] = url or title
 
         context = "\n\n".join(items)
 
-        prompt = f"""You are an academic assistant.
+        prompt = f'''You are an academic assistant.
 Overall task: {req.user_goal}
 
 Instructions:
@@ -205,7 +259,7 @@ Instructions:
 - {cite_line}
 - {focus_line}
 
-"""
+'''
         if req.system_prompt:
             prompt = req.system_prompt.strip() + "\n\n" + prompt
 
@@ -214,6 +268,50 @@ Instructions:
 
         prompt += "\nPapers:\n" + context + "\n"
         return prompt, titles_for_cite, citations_map
+
+    def _fallback_result(
+        self,
+        papers: List[PaperInput],
+        req: SummarizeRequest,
+        titles_for_cite: List[str],
+        citations_map: Dict[str, str],
+        *,
+        reason: Optional[str] = None,
+    ) -> SummarizeResult:
+        if not titles_for_cite:
+            titles_for_cite = [paper.title or paper.id or f"Paper {idx}" for idx, paper in enumerate(papers, start=1)]
+        if not citations_map:
+            citations_map = {
+                f"[{idx}]": paper.url or paper.title or paper.id or f"Paper {idx}"
+                for idx, paper in enumerate(papers, start=1)
+            }
+
+        header = "LLM summary unavailable; providing heuristic synthesis instead."
+        if reason:
+            header += f" ({reason})"
+
+        if not papers:
+            lines = [header, "No papers were supplied."]
+        else:
+            lines = [header]
+            for idx, paper in enumerate(papers, start=1):
+                snippet = _truncate(paper.abstract or paper.title or "", 280) or "Abstract not available."
+                lines.append(
+                    f"{idx}. {paper.title or paper.id or f'Paper {idx}'}"
+                    f" ({paper.year or 'n.d.'}) — {snippet}"
+                )
+            if req.focus_aspect:
+                lines.append(f"Focus aspect: {req.focus_aspect}.")
+            lines.append("Use these bullets until the full AI summary becomes available.")
+
+        return SummarizeResult(
+            text="\n".join(lines),
+            used_count=len(papers),
+            citations=titles_for_cite,
+            prompt_tokens_estimate=0,
+            citations_map=citations_map,
+            cost_estimate=None,
+        )
 
 
 # -------- Tool wrappers --------

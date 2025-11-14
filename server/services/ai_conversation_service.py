@@ -67,9 +67,26 @@ class AIConversationService:
         if not record:
             return None
 
+        papers = record.get("papers", [])
+        paper_ids = [p.get("paper_id") for p in papers if p.get("paper_id")]
+        
+        fulltext_map = {}
+        if self._paper_repository and paper_ids:
+            fulltext_map = self._paper_repository.fetch_fulltext_map(paper_ids)
+        
+        # Inject the full text back into the paper items
+        for paper in papers:
+            paper_id = paper.get("paper_id")
+            if paper_id in fulltext_map:
+                payload = fulltext_map[paper_id]
+                paper["full_text"] = payload.get("plain_text", "")
+                paper["sections"] = payload.get("sections", [])
+                paper["tables"] = payload.get("tables", [])
+                paper["fulltext_metadata"] = payload.get("metadata", {})
+
         paper_summaries: List[PaperSummary] = []
         selected_ids: List[str] = []
-        for item in record.get("papers", []):
+        for item in papers:
             paper_id = item.get("paper_id")
             if not paper_id:
                 continue
@@ -81,6 +98,10 @@ class AIConversationService:
                     authors=tuple(item.get("authors") or []),
                     year=item.get("publication_year"),
                     url=item.get("url"),
+                    full_text=item.get("full_text") or "",
+                    sections=item.get("sections") or [],
+                    tables=item.get("tables") or [],
+                    metadata=item.get("fulltext_metadata") or {},
                 )
             )
             if item.get("selected"):

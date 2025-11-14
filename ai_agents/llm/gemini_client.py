@@ -147,12 +147,19 @@ class GeminiText:
         prompt_text = self._prepare_prompt(prompt)
         url = _GEN_URL.format(model=self.model)
         payload = {
-            "contents": [{"parts": [{"text": prompt_text}]}],
+            "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
             "generationConfig": {
                 "temperature": temperature,
                 "maxOutputTokens": max_output_tokens,
                 "candidateCount": candidate_count,
             },
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_ONLY_HIGH"},
+            ],
         }
         data = _post(
             url,
@@ -165,9 +172,25 @@ class GeminiText:
 
         candidates = data.get("candidates") or []
         if not candidates:
-            return ""
-        parts = (candidates[0].get("content") or {}).get("parts") or []
-        return parts[0].get("text", "") if parts else ""
+            raise GeminiError(
+                "Gemini returned no candidates",
+                payload={"prompt_feedback": data.get("promptFeedback")},
+            )
+
+        for candidate in candidates:
+            parts = (candidate.get("content") or {}).get("parts") or []
+            texts = [
+                part.get("text")
+                for part in parts
+                if isinstance(part, dict) and isinstance(part.get("text"), str) and part.get("text").strip()
+            ]
+            if texts:
+                return "\n".join(texts)
+
+        raise GeminiError(
+            "Gemini candidates contained no text parts",
+            payload={"prompt_feedback": data.get("promptFeedback"), "candidates": candidates},
+        )
 
     def chat_multi_candidate(
         self,

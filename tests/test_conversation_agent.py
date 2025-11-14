@@ -112,6 +112,7 @@ def sample_paper() -> PaperSummary:
         authors=["Alice", "Bob"],
         year=2024,
         url="https://example.org/p1",
+        full_text="Parsed content for testing.",
     )
 
 
@@ -143,9 +144,14 @@ def test_quick_summary_invokes_tool_with_selected_papers(sample_paper: PaperSumm
     agent.start_session("session-summary", initial_selection=["P1"])
 
     reply = agent.handle_message("session-summary", "Could you summarize these papers?")
+    assert "parsed papers" in reply.text
+    assert reply.metadata.get("summary_pending") is True
+    assert summary_tool.last_payload is None
 
-    assert reply.text == "Here is the quick summary."
-    assert reply.citations == ["Test Paper"]
+    followup = agent.handle_message("session-summary", "1")
+
+    assert followup.text == "Here is the quick summary."
+    assert followup.citations == ["Test Paper"]
     assert summary_tool.last_payload is not None
     papers_payload = summary_tool.last_payload["papers"]
     assert len(papers_payload) == 1
@@ -160,6 +166,7 @@ def test_focus_summary_after_selection_changes(sample_paper: PaperSummary):
         authors=["Carol"],
         year=2023,
         url="https://example.org/p2",
+        full_text="Additional parsed content.",
     )
 
     registry = ToolRegistry()
@@ -194,6 +201,7 @@ def test_multi_step_conversation_flow_returns_expected_responses(sample_paper: P
         authors=["Bob"],
         year=2023,
         url="https://example.org/p2",
+        full_text="Parsed content for second paper.",
     )
 
     registry = ToolRegistry()
@@ -209,12 +217,15 @@ def test_multi_step_conversation_flow_returns_expected_responses(sample_paper: P
     reply1 = agent.handle_message("session-workflow", "Please expand keyword LLM transformer.")
     reply2 = agent.handle_message("session-workflow", "Remove paper P2 from the list.")
     reply3 = agent.handle_message("session-workflow", "Could you summarize these papers?")
+    assert reply3.metadata.get("summary_pending") is True
+    assert "parsed papers" in reply3.text
+    reply3_followup = agent.handle_message("session-workflow", "paper 1")
     reply4 = agent.handle_message("session-workflow", "Provide an overall summary of the selection.")
     reply5 = agent.handle_message("session-workflow", "Focus on the methodology of the remaining papers.")
 
     assert "Core terms" in reply1.text
     assert "Removed requested papers" in reply2.text
-    assert reply3.text == "Here is the quick summary."
+    assert reply3_followup.text == "Here is the quick summary."
     assert reply4.text.startswith("Comprehensive synthesis")
     assert reply5.text.startswith("Focused insight about")
 def test_search_extension_adds_new_papers(sample_paper: PaperSummary):

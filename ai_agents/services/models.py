@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 
 @dataclass
@@ -20,10 +20,15 @@ class PaperSummary:
     authors: Sequence[str] = field(default_factory=list)
     year: Optional[int] = None
     url: Optional[str] = None
+    full_text: str = ""
+    sections: Sequence[Dict[str, Any]] = field(default_factory=list)
+    tables: Sequence[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def keywords(self) -> List[str]:
         """Extract a simple keyword list from the abstract for quick matching."""
-        tokens = re.findall(r"[a-zA-Z0-9\-]+", self.abstract.lower())
+        source = self.full_text or self.abstract
+        tokens = re.findall(r"[a-zA-Z0-9\-]+", source.lower())
         return list(dict.fromkeys(tokens))
 
 

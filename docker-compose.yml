@@ -22,11 +22,11 @@ services:
 
   frontend:
     build:
-      context: ./
-      dockerfile: ./client/Dockerfile
+      context: ./client
+      dockerfile: Dockerfile
     volumes:
-      - ./client:/app
-      - /app/node_modules
+      - ./client/src:/app/src
+      - ./client/public:/app/public
     ports:
       - "3000:3000"
     depends_on:
