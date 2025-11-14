@@ -1,3 +1,5 @@
+import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -10,6 +12,7 @@ from server.data_access.search_history_repository import SearchHistoryRepository
 from server.data_access.conversation_repository import ConversationRepository
 from server.data_access.summary_repository import SummaryRepository
 from server.services.academic_search import AcademicSearchService, search_openalex_papers
+from server.services.chunking_service import TextChunkingService
 from server.services.docling_service import DoclingIngestionService
 from server.services.pdf_cache_service import PDFCacheService
 from server.services.ai_conversation_service import AIConversationService
@@ -17,15 +20,23 @@ from server.services.orchestration_service import OrchestrationService
 from server.services.auth_service import register_user, login_user
 from ai_agents.services.pdf_builder import SummaryPdfBuilder
 from server.services.search_extension_tool import SearchExtensionTool
+from server.services.deep_research_service import DeepResearchService
 
 api_blueprint = Blueprint("api", __name__)
+logger = logging.getLogger(__name__)
 
 # TODO: Inject real dependencies such as repositories and agent clients
 orchestration_service = OrchestrationService()
 paper_repository = PaperRepository()
 search_history_repository = SearchHistoryRepository()
 pdf_cache_service = PDFCacheService()
-docling_service = DoclingIngestionService(paper_repository=paper_repository)
+chunking_service = TextChunkingService(paper_repository=paper_repository)
+enable_docling = os.getenv("ENABLE_DOCLING", "true").lower() not in {"0", "false", "no"}
+docling_service = DoclingIngestionService(
+    paper_repository=paper_repository,
+    chunking_service=chunking_service,
+    enable_docling=enable_docling,
+)
 academic_search_service = AcademicSearchService(
     paper_repository=paper_repository,
     history_repository=search_history_repository,
@@ -40,6 +51,10 @@ conversation_service.register_tool(SearchExtensionTool(academic_search_service))
 conversation_repository = ConversationRepository()
 summary_repository = SummaryRepository()
 summary_pdf_builder = SummaryPdfBuilder()
+deep_research_service = DeepResearchService(
+    paper_repository=paper_repository,
+    history_repository=search_history_repository,
+)
 
 
 from typing import Optional
@@ -518,6 +533,33 @@ def create_summary_via_api():
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:  # pragma: no cover - defensive
         return jsonify({"error": str(exc)}), 500
+
+
+@api_blueprint.post("/deep_research")
+def run_deep_research():
+    payload = request.get_json(silent=True) or {}
+    history_id = payload.get("history_id")
+    if not history_id:
+        return jsonify({"error": "history_id is required"}), 400
+
+    paper_ids = payload.get("paper_ids") or []
+    instructions = payload.get("instructions")
+    language = payload.get("language") or "en"
+
+    try:
+        result = deep_research_service.run(
+            history_id=int(history_id),
+            paper_ids=list(paper_ids),
+            instructions=instructions,
+            language=language,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Deep research run failed")
+        return jsonify({"error": "Deep research failed. Please try again."}), 500
+
+    return jsonify(result), 200
 
     conversation_repository.append_messages(
         session_id,

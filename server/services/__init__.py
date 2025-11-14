@@ -4,6 +4,7 @@ from .orchestration_service import OrchestrationService
 from .academic_search import AcademicSearchService
 from .docling_service import DoclingIngestionService
 from .pdf_cache_service import PDFCacheService
+from .deep_research_service import DeepResearchService
 
 __all__ = [
     "AgentGateway",
@@ -12,4 +13,5 @@ __all__ = [
     "AcademicSearchService",
     "DoclingIngestionService",
     "PDFCacheService",
+    "DeepResearchService",
 ]

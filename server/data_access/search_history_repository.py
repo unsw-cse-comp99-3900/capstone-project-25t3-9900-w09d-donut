@@ -141,7 +141,22 @@ class SearchHistoryRepository:
                        f.plain_text AS full_text,
                        f.sections_json,
                        f.tables_json,
-                       f.metadata_json
+                       f.metadata_json,
+                       (
+                           SELECT json_group_array(chunk_payload)
+                           FROM (
+                               SELECT json_object(
+                                   'chunk_index', pc.chunk_index,
+                                   'section_label', pc.section_label,
+                                   'heading', pc.heading,
+                                   'text', pc.text,
+                                   'token_estimate', pc.token_estimate
+                               ) AS chunk_payload
+                               FROM paper_chunks pc
+                               WHERE pc.paper_id = i.paper_id
+                               ORDER BY pc.chunk_index ASC
+                           )
+                       ) AS chunks_json
                 FROM search_history_items i
                 LEFT JOIN papers p ON p.paper_id = i.paper_id
                 LEFT JOIN paper_fulltext f ON f.paper_id = i.paper_id
@@ -164,6 +179,7 @@ class SearchHistoryRepository:
                 sections_json = record.pop("sections_json", None)
                 tables_json = record.pop("tables_json", None)
                 metadata_json = record.pop("metadata_json", None)
+                chunks_json = record.pop("chunks_json", None)
                 if sections_json:
                     try:
                         record["sections"] = json.loads(sections_json)
@@ -183,6 +199,13 @@ class SearchHistoryRepository:
                         record["fulltext_metadata"] = {}
                 else:
                     record["fulltext_metadata"] = {}
+                if chunks_json:
+                    try:
+                        record["chunks"] = json.loads(chunks_json)
+                    except json.JSONDecodeError:
+                        record["chunks"] = []
+                else:
+                    record["chunks"] = []
                 if "full_text" not in record or record["full_text"] is None:
                     record["full_text"] = ""
                 if "sections" not in record:

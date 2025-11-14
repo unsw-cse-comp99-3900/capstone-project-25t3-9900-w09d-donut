@@ -17,18 +17,15 @@ except Exception:  # pragma: no cover
     fitz = None
 
 try:  # pragma: no cover - prefer new API
-    from docling.document_converter import DocumentConverter
+    from docling.document_converter import DocumentConverter  # type: ignore
 except ModuleNotFoundError:
     try:
         from docling.document import DocumentConverter  # type: ignore
     except ModuleNotFoundError:
-        class DocumentConverter:  # type: ignore
-            def convert(self, path: str):  # pylint: disable=unused-argument
-                raise ModuleNotFoundError(
-                    "Docling is not installed. Install it via requirements to enable PDF ingestion."
-                )
+        DocumentConverter = None  # type: ignore
 
 from server.data_access.paper_repository import PaperRepository
+from .chunking_service import TextChunkingService
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +80,27 @@ class DoclingIngestionService:
         max_workers: int = 2,
         max_pdf_bytes: int = 25 * 1024 * 1024,
         downloader: Optional[Callable[[str], bytes]] = None,
+        enable_docling: bool = True,
+        chunking_service: Optional["TextChunkingService"] = None,
     ) -> None:
         self._paper_repository = paper_repository or PaperRepository()
-        self._converter = converter or DocumentConverter()
+        self._converter = None
+        if converter is not None:
+            self._converter = converter
+            self._enable_docling = True
+        else:
+            self._enable_docling = enable_docling and DocumentConverter is not None
+            if self._enable_docling:
+                try:
+                    self._converter = DocumentConverter()  # type: ignore[call-arg]
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("Docling converter unavailable (%s); falling back to PyMuPDF only.", exc)
+                    self._converter = None
+                    self._enable_docling = False
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         self._max_pdf_bytes = max_pdf_bytes
         self._downloader = downloader or self._download_pdf
+        self._chunking_service = chunking_service
         self._inflight: set[str] = set()
         self._lock = threading.Lock()
 
@@ -133,6 +145,11 @@ class DoclingIngestionService:
                 logger.debug("No valid source for %s", paper_id)
                 return
             self._paper_repository.upsert_fulltext(paper_id, payload)
+            if self._chunking_service:
+                try:
+                    self._chunking_service.build_chunks(paper_id, payload)
+                except Exception as chunk_exc:  # pragma: no cover
+                    logger.warning("Chunking failed for %s: %s", paper_id, chunk_exc)
             logger.info("Docling stored full text for %s", paper_id)
         except Exception as exc:  # pragma: no cover - failures logged for observability
             logger.warning("Docling ingestion failed for %s: %s", paper_id, exc)
@@ -168,6 +185,9 @@ class DoclingIngestionService:
                 pass
 
     def _convert_file(self, file_path: Path) -> Dict[str, object]:
+        if not self._enable_docling or not self._converter:
+            return self._extract_plain_payload(file_path)
+
         conversion = self._converter.convert(str(file_path))
         document = getattr(conversion, "document", None)
         if document is None:
@@ -175,7 +195,8 @@ class DoclingIngestionService:
             if documents:
                 document = documents[0]
         if document is None:
-            raise ValueError("Docling conversion produced no document")
+            logger.warning("Docling conversion produced no document, using PyMuPDF fallback.")
+            return self._extract_plain_payload(file_path)
 
         sections_serialized, section_chunks = self._serialize_sections(document)
         structured_sections = self._structure_sections(sections_serialized)
@@ -208,6 +229,19 @@ class DoclingIngestionService:
             "tables": tables_serialized,
             "metadata": metadata,
             "structured_sections": structured_sections,
+        }
+
+    def _extract_plain_payload(self, file_path: Path) -> Dict[str, object]:
+        plain_text = self._extract_with_pymupdf(file_path)
+        metadata = {"extraction_mode": "pymupdf"}
+        if not plain_text:
+            raise ValueError("Unable to extract text via PyMuPDF")
+        return {
+            "plain_text": plain_text,
+            "sections": [],
+            "tables": [],
+            "metadata": metadata,
+            "structured_sections": {},
         }
 
     def _serialize_sections(self, document) -> tuple[List[object], List[str]]:

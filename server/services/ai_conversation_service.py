@@ -73,6 +73,11 @@ class AIConversationService:
             paper_id = item.get("paper_id")
             if not paper_id:
                 continue
+            metadata_payload = item.get("fulltext_metadata") or {}
+            chunks = item.get("chunks") or []
+            if chunks:
+                metadata_payload = dict(metadata_payload)
+                metadata_payload["chunks"] = chunks
             paper_summaries.append(
                 PaperSummary(
                     paper_id=paper_id,
@@ -84,7 +89,7 @@ class AIConversationService:
                     full_text=item.get("full_text") or "",
                     sections=item.get("sections") or [],
                     tables=item.get("tables") or [],
-                    metadata=item.get("fulltext_metadata") or {},
+                    metadata=metadata_payload,
                 )
             )
             if item.get("selected"):

@@ -42,12 +42,22 @@ class _FakeConverter:
         return _FakeConversion(with_sections=self._with_sections, with_blocks=self._with_blocks)
 
 
+class _FakeChunker:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def build_chunks(self, paper_id, payload):
+        self.calls.append((paper_id, payload))
+
+
 def test_docling_service_ingests_pdf_into_repository(temp_db):
     repo = PaperRepository()
+    chunker = _FakeChunker()
     service = DoclingIngestionService(
         paper_repository=repo,
         converter=_FakeConverter(),
         downloader=lambda url: b"%PDF-1.4 fake",
+        chunking_service=chunker,
     )
     service.ingest_pdf_now("paper-123", "https://example.com/demo.pdf")
 
@@ -55,15 +65,18 @@ def test_docling_service_ingests_pdf_into_repository(temp_db):
     payload = stored["paper-123"]
     assert payload["plain_text"] == "hello world"
     assert payload["sections"][0]["title"] == "Intro"
+    assert chunker.calls and chunker.calls[0][0] == "paper-123"
 
 
 def test_docling_ingests_from_cached_file(temp_db, tmp_path):
     pdf_path = tmp_path / "demo.pdf"
     pdf_path.write_bytes(b"fake")
     repo = PaperRepository()
+    chunker = _FakeChunker()
     service = DoclingIngestionService(
         paper_repository=repo,
         converter=_FakeConverter(),
+        chunking_service=chunker,
     )
     service.ingest_pdf_now("paper-file", file_path=str(pdf_path))
 
@@ -75,9 +88,11 @@ def test_docling_block_fallback(temp_db, tmp_path):
     pdf_path = tmp_path / "demo.pdf"
     pdf_path.write_bytes(b"fake")
     repo = PaperRepository()
+    chunker = _FakeChunker()
     service = DoclingIngestionService(
         paper_repository=repo,
         converter=_FakeConverter(with_sections=False, with_blocks=True),
+        chunking_service=chunker,
     )
     service.ingest_pdf_now("paper-block", file_path=str(pdf_path))
 

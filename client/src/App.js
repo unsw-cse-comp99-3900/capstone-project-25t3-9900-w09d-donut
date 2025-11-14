@@ -27,6 +27,7 @@ import {
   Paper,
   CircularProgress,
   Link as MuiLink,
+  Checkbox,
 } from '@mui/material';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import { BrowserRouter as Router, Routes, Route, Link as RouterLink } from 'react-router-dom';
@@ -61,7 +62,7 @@ const readHistoryMap = () => {
   }
 };
 
-const readLegacyHistory = () => {
+  const readLegacyHistory = () => {
   try {
     const raw = localStorage.getItem('searchHistory');
     if (!raw) {
@@ -135,6 +136,29 @@ const ResearchPlanner = () => {
   const [chatLoading, setChatLoading] = useState(false);
   const [selectedPaperIds, setSelectedPaperIds] = useState([]);
   const [refreshingStatus, setRefreshingStatus] = useState(false);
+  const togglePaperSelection = (paperId) => {
+    if (!paperId) {
+      return;
+    }
+    setSelectedPaperIds((prev) =>
+      prev.includes(paperId)
+        ? prev.filter((id) => id !== paperId)
+        : [...prev, paperId]
+    );
+  };
+
+  const toggleSelectAll = (checked) => {
+    if (!checked) {
+      setSelectedPaperIds([]);
+      return;
+    }
+    const ids = results.map((row) => row.paper_id).filter(Boolean);
+    setSelectedPaperIds(ids);
+  };
+  const [deepResearchInstructions, setDeepResearchInstructions] = useState('');
+  const [deepResearchResult, setDeepResearchResult] = useState(null);
+  const [deepResearchError, setDeepResearchError] = useState('');
+  const [deepResearchLoading, setDeepResearchLoading] = useState(false);
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -162,6 +186,12 @@ const ResearchPlanner = () => {
   useEffect(() => {
     setHistory(readHistoryForUser(authUser));
   }, [authUser]);
+
+  useEffect(() => {
+    setDeepResearchResult(null);
+    setDeepResearchError('');
+    setSelectedPaperIds([]);
+  }, [activeHistoryId]);
 
   const resolveAuthEmail = () => authUser?.email || localStorage.getItem('authEmail') || '';
   const canChat = Boolean(activeHistoryId && resolveAuthEmail());
@@ -194,6 +224,7 @@ const ResearchPlanner = () => {
         selected: item.selected !== undefined ? Boolean(item.selected) : true,
         full_text: item.full_text || '',
         structured_sections: item.structured_sections || {},
+        chunks: item.chunks || [],
       };
     });
 
@@ -248,6 +279,9 @@ const ResearchPlanner = () => {
     setChatStatus('');
     setChatError('');
     setSelectedPaperIds([]);
+    setDeepResearchInstructions('');
+    setDeepResearchResult(null);
+    setDeepResearchError('');
   };
 
   const bootstrapChatSession = async (historyId) => {
@@ -471,6 +505,37 @@ const ResearchPlanner = () => {
       return;
     }
     await sendChatMessage(chatInput, { clearInput: true });
+  };
+
+  const handleDeepResearch = async () => {
+    if (!activeHistoryId) {
+      setDeepResearchError('Please select a search history item before running deep research.');
+      return;
+    }
+    if (selectedPaperIds.length === 0) {
+      setDeepResearchError('Select at least one paper to analyse.');
+      return;
+    }
+    setDeepResearchLoading(true);
+    setDeepResearchError('');
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/api/deep_research`,
+        {
+          history_id: activeHistoryId,
+          paper_ids: selectedPaperIds,
+          instructions: deepResearchInstructions || undefined,
+        },
+        { headers: buildAuthHeaders() }
+      );
+      setDeepResearchResult(response.data);
+    } catch (err) {
+      console.error(err);
+      setDeepResearchResult(null);
+      setDeepResearchError(err?.response?.data?.error || 'Deep research failed. Please try again.');
+    } finally {
+      setDeepResearchLoading(false);
+    }
   };
 
   const handleSummaryCandidateClick = async (candidate, index) => {
@@ -898,8 +963,131 @@ const ResearchPlanner = () => {
                       {chatLoading ? 'Sending...' : 'Send'}
                     </Button>
                   </Box>
-                </Card>
-              </Box>
+              </Card>
+            </Box>
+
+            <Box sx={{ mt: 4 }}>
+              <Card variant="outlined">
+                <CardContent>
+                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }}>
+                    <Box>
+                      <Typography variant="h6">Deep Research</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Select papers from the table and provide optional focus instructions to generate a deeper synthesis.
+                      </Typography>
+                    </Box>
+                    <Typography variant="body2" color="text.secondary">
+                      Selected papers: {selectedPaperIds.length}
+                    </Typography>
+                  </Stack>
+
+                  <TextField
+                    label="Focus or instructions"
+                    multiline
+                    minRows={2}
+                    fullWidth
+                    sx={{ mt: 2 }}
+                    value={deepResearchInstructions}
+                    onChange={(e) => setDeepResearchInstructions(e.target.value)}
+                    placeholder="e.g., Highlight emerging gaps and policy implications"
+                  />
+
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 2 }}>
+                    <Button
+                      variant="contained"
+                      color="secondary"
+                      onClick={handleDeepResearch}
+                      disabled={deepResearchLoading || selectedPaperIds.length === 0 || !activeHistoryId}
+                    >
+                      {deepResearchLoading ? 'Running...' : 'Run Deep Research'}
+                    </Button>
+                    <Button
+                      variant="text"
+                      disabled={!deepResearchInstructions && !deepResearchResult}
+                      onClick={() => {
+                        setDeepResearchInstructions('');
+                        setDeepResearchResult(null);
+                        setDeepResearchError('');
+                      }}
+                    >
+                      Clear
+                    </Button>
+                  </Stack>
+
+                  {deepResearchError && (
+                    <Alert severity="error" sx={{ mt: 2 }}>
+                      {deepResearchError}
+                    </Alert>
+                  )}
+
+                  {deepResearchResult && (
+                    <Box sx={{ mt: 3 }}>
+                      <Typography variant="subtitle1" gutterBottom>
+                        Round Findings
+                      </Typography>
+                      {(deepResearchResult.round?.findings || []).length ? (
+                        <Box component="ul" sx={{ pl: 3 }}>
+                          {deepResearchResult.round.findings.map((finding, idx) => (
+                            <li key={idx}>{finding}</li>
+                          ))}
+                        </Box>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">
+                          No findings were generated.
+                        </Typography>
+                      )}
+
+                      {(deepResearchResult.round?.missing || []).length > 0 && (
+                        <>
+                          <Typography variant="subtitle1" sx={{ mt: 2 }}>
+                            Gaps to explore
+                          </Typography>
+                          <Box component="ul" sx={{ pl: 3 }}>
+                            {deepResearchResult.round.missing.map((gap, idx) => (
+                              <li key={idx}>{gap}</li>
+                            ))}
+                          </Box>
+                        </>
+                      )}
+
+                      {(deepResearchResult.query_suggestions || []).length > 0 && (
+                        <>
+                          <Typography variant="subtitle1" sx={{ mt: 2 }}>
+                            Suggested next queries
+                          </Typography>
+                          <Box component="ul" sx={{ pl: 3 }}>
+                            {deepResearchResult.query_suggestions.map((item, idx) => (
+                              <li key={idx}>{item.query}</li>
+                            ))}
+                          </Box>
+                        </>
+                      )}
+
+                      {deepResearchResult.report && (
+                        <Box sx={{ mt: 3 }}>
+                          <Typography variant="subtitle1" gutterBottom>
+                            Final memo
+                          </Typography>
+                          <Box
+                            component="pre"
+                            sx={{
+                              whiteSpace: 'pre-wrap',
+                              bgcolor: '#f5f5f5',
+                              p: 2,
+                              borderRadius: 1,
+                              maxHeight: 320,
+                              overflowY: 'auto',
+                            }}
+                          >
+                            {deepResearchResult.report}
+                          </Box>
+                        </Box>
+                      )}
+                    </Box>
+                  )}
+                </CardContent>
+              </Card>
+            </Box>
             </>
           )}
           {error && (
@@ -920,6 +1108,13 @@ const ResearchPlanner = () => {
               <Table>
                 <TableHead>
                   <TableRow>
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        indeterminate={selectedPaperIds.length > 0 && selectedPaperIds.length < results.length}
+                        checked={results.length > 0 && selectedPaperIds.length === results.length}
+                        onChange={(e) => toggleSelectAll(e.target.checked)}
+                      />
+                    </TableCell>
                     <TableCell><strong>Authors</strong></TableCell>
                     <TableCell><strong>Year</strong></TableCell>
                     <TableCell><strong>Title</strong></TableCell>
@@ -938,6 +1133,13 @@ const ResearchPlanner = () => {
                         selected={isSelected}
                         sx={{ bgcolor: isSelected ? 'rgba(25, 118, 210, 0.08)' : undefined }}
                       >
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            checked={isSelected}
+                            onChange={() => togglePaperSelection(row.paper_id)}
+                            disabled={!row.paper_id}
+                          />
+                        </TableCell>
                         <TableCell>{Array.isArray(row.authors) && row.authors.length ? row.authors.join(', ') : '-'}</TableCell>
                         <TableCell>{row.publication_date || row.publication_year || '-'}</TableCell>
                         <TableCell>
@@ -947,13 +1149,13 @@ const ResearchPlanner = () => {
                         </TableCell>
                         <TableCell>{row.source || '-'}</TableCell>
                         <TableCell>{row.cited_by_count || 0}</TableCell>
-                    <TableCell>
-                      {row.full_text ? (
-                        <Chip label="Parsed" color="success" size="small" />
-                      ) : (
-                        <Chip label="Not Parsed" color="warning" size="small" />
-                      )}
-                    </TableCell>
+                        <TableCell>
+                          {row.full_text ? (
+                            <Chip label="Parsed" color="success" size="small" />
+                          ) : (
+                            <Chip label="Not Parsed" color="warning" size="small" />
+                          )}
+                        </TableCell>
                         <TableCell>
                           {row.pdf_url ? (
                             <MuiLink href={row.pdf_url} target="_blank" rel="noopener">
