@@ -146,6 +146,13 @@ class PaperSummarizer:
             )
         except (GeminiError, ValueError) as exc:
             logger.warning("Gemini summarization unavailable, using fallback: %s", exc)
+            # --- BEGIN ENHANCED DEBUG ---
+            logger.error("="*80)
+            logger.error(">>> [DEBUG] Gemini API Call Failed <<<")
+            logger.error("Full exception details:")
+            logger.error(repr(exc))
+            logger.error("="*80)
+            # --- END ENHANCED DEBUG ---
             return self._fallback_result(papers, req, titles_for_cite, citations_map, reason=str(exc))
 
         cleaned = out.strip()
