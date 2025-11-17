@@ -49,6 +49,12 @@ class ParsedIntent:
     request_expansion: bool = False
 
 
+@dataclass
+class SummaryChoice:
+    paper_id: str
+    mode: str = "quick"
+
+
 class NaturalLanguageInterpreter:
     YEAR_RANGE_PATTERN = re.compile(r"(last|past)\s+(\d+)\s+year")
     SINCE_PATTERN = re.compile(r"since\s+(\d{4})")
@@ -114,6 +120,14 @@ class NaturalLanguageInterpreter:
         if any(term in lower for term in ["cite", "citation", "references"]):
             targets = self._resolve_targets(message, session)
             return ParsedIntent(action="cite", target_ids=targets or list(session.selected_ids), explicit_targets=bool(targets))
+
+        if any(term in lower for term in ["detailed summary", "comprehensive summary", "full summary", "long summary", "pdf summary", "structured summary"]):
+            targets = self._resolve_targets(message, session)
+            return ParsedIntent(
+                action="global_summary",
+                target_ids=targets or list(session.selected_ids),
+                explicit_targets=bool(targets),
+            )
 
         if any(term in lower for term in ["summary", "summarize"]):
             targets = self._resolve_targets(message, session)
@@ -367,9 +381,10 @@ class ConversationAgent:
         pending_choice = self._try_consume_summary_choice(session, memory, message)
         if pending_choice:
             preferred_language = session.filters.get("language") if isinstance(session.filters.get("language"), str) else "en"
+            action = "global_summary" if pending_choice.mode == "detailed" else "quick_summary"
             parsed = ParsedIntent(
-                action="quick_summary",
-                target_ids=[pending_choice],
+                action=action,
+                target_ids=[pending_choice.paper_id],
                 explicit_targets=True,
                 language=preferred_language or "en",
             )
@@ -554,7 +569,19 @@ class ConversationAgent:
         )
 
     def _handle_global_summary(self, session: ConversationSession, memory: SessionMemory, parsed: ParsedIntent) -> AgentReply:
-        papers = self._search_manager.bulk_get(session.selected_ids) or self._search_manager.list_catalogue()
+        target_ids = parsed.target_ids or list(session.selected_ids)
+        if parsed.explicit_targets and target_ids:
+            papers = self._search_manager.bulk_get(target_ids)
+        else:
+            papers = self._search_manager.bulk_get(session.selected_ids)
+        if not papers:
+            papers = self._search_manager.list_catalogue()
+        if parsed.explicit_targets and target_ids and not papers:
+            return AgentReply(
+                text="I could not locate enough parsed text for the selected paper to create a detailed summary.",
+                selected_ids=list(session.selected_ids),
+                citations=[],
+            )
         if not papers:
             return AgentReply(text="No papers are available to produce a global synthesis.", selected_ids=[], citations=[])
 
@@ -840,7 +867,7 @@ class ConversationAgent:
         meta = f" ({' / '.join(meta_parts)})" if meta_parts else ""
         return f"{title}{meta} — {self._short_paper_id(paper.paper_id)}"
 
-    def _try_consume_summary_choice(self, session: ConversationSession, memory: SessionMemory, message: str) -> Optional[str]:
+    def _try_consume_summary_choice(self, session: ConversationSession, memory: SessionMemory, message: str) -> Optional[SummaryChoice]:
         artifact = memory.get_artifact(self.SUMMARY_CANDIDATE_ARTIFACT)
         if not artifact:
             return None
@@ -851,10 +878,12 @@ class ConversationAgent:
             return None
         if not isinstance(candidates, list):
             return None
-        choice = self._match_candidate_choice(message, candidates)
-        if choice:
+        choice_id = self._match_candidate_choice(message, candidates)
+        if choice_id:
             memory.clear_artifact(self.SUMMARY_CANDIDATE_ARTIFACT)
-        return choice
+            mode = self._detect_summary_mode(message)
+            return SummaryChoice(paper_id=choice_id, mode=mode)
+        return None
 
     def _match_candidate_choice(self, message: str, candidates: Sequence[Mapping[str, object]]) -> Optional[str]:
         if not message:
@@ -900,6 +929,17 @@ class ConversationAgent:
                 return paper_id
 
         return None
+
+    @staticmethod
+    def _detect_summary_mode(message: str) -> str:
+        text = (message or "").lower()
+        detailed_triggers = ("detailed", "comprehensive", "full", "long", "pdf")
+        if any(keyword in text for keyword in detailed_triggers):
+            return "detailed"
+        quick_triggers = ("quick", "short", "brief")
+        if any(keyword in text for keyword in quick_triggers):
+            return "quick"
+        return "quick"
 
     @staticmethod
     def _short_paper_id(paper_id: str) -> str:

@@ -39,7 +39,7 @@ class SummarizeRequest:
     max_abstract_chars: int = 1200
     max_full_text_chars: int = 60000
     temperature: float = 0.4
-    max_output_tokens: int = 8192
+    max_output_tokens: int = 32768
     mode: str = "quick"  # quick | global | focused | comprehensive
     focus_aspect: Optional[str] = None
     language: str = "en"
@@ -204,7 +204,17 @@ class PaperSummarizer:
             "quick": "Provide a high-level synthesis that highlights the most relevant insights.",
             "global": "Provide an academic-style synthesis covering background, methods, findings, and gaps.",
             "focused": "Provide a comparative analysis focused on the requested aspect.",
-            "comprehensive": "Provide a detailed, structured summary covering context, methodology, experiments, key findings, limitations, and future work.",
+            "comprehensive": (
+                "Provide a detailed, structured summary with explicit section headings. "
+                "Return one solid paragraph (4-6 sentences, rich in specifics) for EACH of these sections, grounded strictly in the provided PDF content: "
+                "1) Background (domain context, prior work, why the problem matters); "
+                "2) Objective (what the study aims to investigate or demonstrate); "
+                "3) Methods (design, dataset/sample size, interventions/architectures, training/eval setup, metrics); "
+                "4) Findings/Results (numerical metrics where available; qualitative insights); "
+                "5) Conclusion/Synthesis (what the evidence collectively shows, ties back to the objective); "
+                "6) Future Directions (authors' suggested next steps and your evidence-based recommendations). "
+                "Do not skip any section; avoid generic filler; cite concrete details from the text."
+            ),
         }.get(req.mode, "Provide a high-level synthesis.")
 
         items: List[str] = []

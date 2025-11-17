@@ -51,6 +51,7 @@ class AIConversationService:
             self._agent.set_session_context(session_id, history_id=history_id)
         elif session_id in self._session_history:
             self._agent.set_session_context(session_id, history_id=self._session_history[session_id])
+        self._refresh_session_papers(session_id)
         return self._agent.handle_message(session_id, message)
 
     def available_tools(self) -> List[str]:
@@ -68,21 +69,6 @@ class AIConversationService:
             return None
 
         papers = record.get("papers", [])
-        paper_ids = [p.get("paper_id") for p in papers if p.get("paper_id")]
-        
-        fulltext_map = {}
-        if self._paper_repository and paper_ids:
-            fulltext_map = self._paper_repository.fetch_fulltext_map(paper_ids)
-        
-        # Inject the full text back into the paper items
-        for paper in papers:
-            paper_id = paper.get("paper_id")
-            if paper_id in fulltext_map:
-                payload = fulltext_map[paper_id]
-                paper["full_text"] = payload.get("plain_text", "")
-                paper["sections"] = payload.get("sections", [])
-                paper["tables"] = payload.get("tables", [])
-                paper["fulltext_metadata"] = payload.get("metadata", {})
 
         paper_summaries: List[PaperSummary] = []
         selected_ids: List[str] = []
@@ -159,6 +145,8 @@ class AIConversationService:
         self._session_history[session_id] = history_id
         self._agent.set_session_context(session_id, history_id=history_id)
 
+        self._refresh_session_papers(session_id)
+
         reply = self._agent.generate_summary(
             session.session_id,
             summary_type=summary_type,
@@ -168,3 +156,45 @@ class AIConversationService:
         if self._history_repository:
             self._history_repository.update_selection(history_id, session.selected_ids)
         return reply
+
+    def _refresh_session_papers(self, session_id: str) -> None:
+        history_id = self._session_history.get(session_id)
+        if history_id is None or not self._history_repository:
+            return
+        record = self._history_repository.get_history_with_papers(history_id)
+        if not record:
+            return
+        papers = record.get("papers", [])
+        paper_ids = [p.get("paper_id") for p in papers if p.get("paper_id")]
+        fulltext_map: Dict[str, Dict[str, object]] = {}
+        if self._paper_repository and paper_ids:
+            fulltext_map = self._paper_repository.fetch_fulltext_map(paper_ids)
+
+        enriched: List[PaperSummary] = []
+        for item in papers:
+            paper_id = item.get("paper_id")
+            if not paper_id:
+                continue
+            payload = fulltext_map.get(paper_id) or {}
+            metadata_payload = payload.get("metadata") or item.get("fulltext_metadata") or {}
+            chunks = payload.get("chunks") or item.get("chunks") or []
+            if chunks and isinstance(metadata_payload, dict):
+                metadata_payload = dict(metadata_payload)
+                metadata_payload["chunks"] = chunks
+
+            enriched.append(
+                PaperSummary(
+                    paper_id=paper_id,
+                    title=item.get("title") or "",
+                    abstract=item.get("abstract") or "",
+                    authors=tuple(item.get("authors") or []),
+                    year=item.get("publication_year"),
+                    url=item.get("url"),
+                    full_text=payload.get("plain_text") or item.get("full_text") or "",
+                    sections=payload.get("sections") or item.get("sections") or [],
+                    tables=payload.get("tables") or item.get("tables") or [],
+                    metadata=metadata_payload,
+                )
+            )
+        if enriched:
+            self._agent.ingest_papers(enriched)
