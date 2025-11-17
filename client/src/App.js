@@ -18,6 +18,7 @@ import {
   Stack,
   Alert,
   Chip,
+  Checkbox,
   Table,
   TableBody,
   TableCell,
@@ -26,6 +27,7 @@ import {
   TableRow,
   Paper,
   CircularProgress,
+  LinearProgress,
   Link as MuiLink,
 } from '@mui/material';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
@@ -135,6 +137,15 @@ const ResearchPlanner = () => {
   const [chatLoading, setChatLoading] = useState(false);
   const [selectedPaperIds, setSelectedPaperIds] = useState([]);
   const [refreshingStatus, setRefreshingStatus] = useState(false);
+  const [deepResearchPrompt, setDeepResearchPrompt] = useState('');
+  const [deepResearchRoundsCount, setDeepResearchRoundsCount] = useState(2);
+  const [deepResearchBreadth, setDeepResearchBreadth] = useState(3);
+  const [deepResearchDocsPerQuery, setDeepResearchDocsPerQuery] = useState(3);
+  const [deepResearchResult, setDeepResearchResult] = useState(null);
+  const [deepResearchLoading, setDeepResearchLoading] = useState(false);
+  const [deepResearchError, setDeepResearchError] = useState('');
+  const [deepUploadFiles, setDeepUploadFiles] = useState([]);
+  const [deepUploadStatus, setDeepUploadStatus] = useState('');
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -163,8 +174,14 @@ const ResearchPlanner = () => {
     setHistory(readHistoryForUser(authUser));
   }, [authUser]);
 
+  useEffect(() => {
+    setDeepResearchResult(null);
+    setDeepResearchError('');
+  }, [activeHistoryId]);
+
   const resolveAuthEmail = () => authUser?.email || localStorage.getItem('authEmail') || '';
   const canChat = Boolean(activeHistoryId && resolveAuthEmail());
+  const canDeepResearch = Boolean(activeHistoryId && resolveAuthEmail() && selectedPaperIds.length > 0);
 
   const buildAuthHeaders = () => {
     const email = resolveAuthEmail();
@@ -202,6 +219,13 @@ const ResearchPlanner = () => {
     setSelectedPaperIds(selectedIds);
   };
 
+  const resetDeepResearchState = () => {
+    setDeepResearchPrompt('');
+    setDeepResearchResult(null);
+    setDeepResearchError('');
+    setDeepResearchLoading(false);
+  };
+
   const fetchHistoryDetails = async (historyId) => {
     const email = resolveAuthEmail();
     if (!historyId || !email) {
@@ -226,6 +250,25 @@ const ResearchPlanner = () => {
     }
   };
 
+  const persistSelection = async (selectedIds) => {
+    if (!activeHistoryId || !resolveAuthEmail()) {
+      return;
+    }
+    try {
+      await axios.post(
+        `${API_BASE_URL}/api/search/history/${activeHistoryId}/selection`,
+        {
+          selected_ids: selectedIds,
+        },
+        {
+          headers: buildAuthHeaders(),
+        }
+      );
+    } catch (persistErr) {
+      console.warn('Failed to persist paper selection', persistErr);
+    }
+  };
+
   const handleRefreshStatuses = async () => {
     if (!activeHistoryId) {
       return;
@@ -238,6 +281,25 @@ const ResearchPlanner = () => {
     } finally {
       setRefreshingStatus(false);
     }
+  };
+
+  const handleTogglePaperSelection = (paperId) => {
+    if (!paperId) {
+      return;
+    }
+    setSelectedPaperIds((prev) => {
+      const exists = prev.includes(paperId);
+      const updated = exists ? prev.filter((id) => id !== paperId) : [...prev, paperId];
+      setResults((current) =>
+        current.map((paper) =>
+          paper.paper_id === paperId ? { ...paper, selected: updated.includes(paper.paper_id) } : paper
+        )
+      );
+      if (activeHistoryId) {
+        persistSelection(updated);
+      }
+      return updated;
+    });
   };
 
   const resetChatState = () => {
@@ -294,11 +356,13 @@ const ResearchPlanner = () => {
     setError('');
     setShowHistory(false);
     resetChatState();
+    resetDeepResearchState();
     window.dispatchEvent(new Event('auth:changed'));
   };
 
   const handleGeneratePlan = async () => {
     resetChatState();
+    resetDeepResearchState();
     setLoading(true);
     setResult(null);
     setError('');
@@ -377,6 +441,7 @@ const ResearchPlanner = () => {
     setError('');
     setShowHistory(false);
     resetChatState();
+    resetDeepResearchState();
   };
 
   const handleFileChange = (e) => {
@@ -416,16 +481,16 @@ const ResearchPlanner = () => {
   const sendChatMessage = async (rawMessage, options = {}) => {
     const trimmed = (rawMessage || '').trim();
     if (!trimmed) {
-      return;
+      return null;
     }
     if (!activeHistoryId) {
       setChatError('Please run a logged-in search before chatting.');
-      return;
+      return null;
     }
     const email = resolveAuthEmail();
     if (!email) {
       setChatError('Please sign in to chat with the AI assistant.');
-      return;
+      return null;
     }
     setChatLoading(true);
     setChatError('');
@@ -434,7 +499,7 @@ const ResearchPlanner = () => {
       sessionId = await bootstrapChatSession(activeHistoryId);
       if (!sessionId) {
         setChatLoading(false);
-        return;
+        return null;
       }
     }
     try {
@@ -458,9 +523,11 @@ const ResearchPlanner = () => {
       if (activeHistoryId) {
         await fetchHistoryDetails(activeHistoryId);
       }
+      return response.data;
     } catch (chatErr) {
       console.error(chatErr);
       setChatError(chatErr?.response?.data?.error || 'Assistant failed to respond. Please try again.');
+      return null;
     } finally {
       setChatLoading(false);
     }
@@ -473,13 +540,244 @@ const ResearchPlanner = () => {
     await sendChatMessage(chatInput, { clearInput: true });
   };
 
-  const handleSummaryCandidateClick = async (candidate, index) => {
+  const handleSummaryCandidateClick = async (candidate, index, mode = 'quick') => {
     if (chatLoading || !candidate) {
       return;
     }
     const identifier = candidate.paper_id || candidate.short_id || `paper ${index + 1}`;
-    const prompt = `Summarize ${identifier}`;
+    const prompt =
+      mode === 'detailed'
+        ? `Detailed summary for ${identifier}`
+        : `Quick summary for ${identifier}`;
     await sendChatMessage(prompt);
+  };
+
+  const handleDeepUploadChange = (e) => {
+    setDeepUploadFiles(e.target.files ? Array.from(e.target.files) : []);
+  };
+
+  const handleDeepUpload = async () => {
+    if (!deepUploadFiles.length) {
+      setDeepUploadStatus('Please select at least one PDF.');
+      return;
+    }
+    if (!activeHistoryId) {
+      setDeepUploadStatus('Run a search and select a history before uploading.');
+      return;
+    }
+    const formData = new FormData();
+    deepUploadFiles.forEach((file) => formData.append('files', file));
+    formData.append('history_id', activeHistoryId);
+    const email = resolveAuthEmail();
+    if (email) {
+      formData.append('user_email', email);
+    }
+    setDeepUploadStatus('Uploading and parsing...');
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/deep_research/upload`, {
+        method: 'POST',
+        body: formData,
+        headers: buildAuthHeaders(),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setDeepUploadStatus(data.error || 'Upload failed.');
+        return;
+      }
+      const newPapers = normalizePapers(data.papers || []);
+      setResults((prev) => [...prev, ...newPapers]);
+      const newIds = newPapers.map((p) => p.paper_id).filter(Boolean);
+      setSelectedPaperIds((prev) => [...new Set([...prev, ...newIds])]);
+      setDeepUploadStatus('Uploaded and parsed successfully.');
+    } catch (err) {
+      console.error(err);
+      setDeepUploadStatus('Upload failed.');
+    }
+  };
+
+  const renderSourceChips = (sources) => {
+    if (!Array.isArray(sources) || sources.length === 0) {
+      return '-';
+    }
+    return (
+      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+        {sources.map((src) => (
+          <Chip key={src} size="small" label={src} />
+        ))}
+      </Stack>
+    );
+  };
+
+  const renderDeepResearchReport = () => {
+    if (!deepResearchResult || !deepResearchResult.report) {
+      return null;
+    }
+    const memo = deepResearchResult.report;
+    const structured = memo && typeof memo === 'object' && !Array.isArray(memo);
+    if (!structured) {
+      return (
+        <>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            Final memo
+          </Typography>
+          <Box
+            component="pre"
+            sx={{
+              whiteSpace: 'pre-wrap',
+              bgcolor: '#f5f5f5',
+              borderRadius: 1,
+              p: 2,
+              mt: 1,
+              fontFamily: 'inherit',
+              fontSize: 14,
+            }}
+          >
+            {memo}
+          </Box>
+        </>
+      );
+    }
+
+    return (
+      <Box>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
+          {memo.title || 'Research Memo'}
+        </Typography>
+        {memo.overview && (
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            {memo.overview}
+          </Typography>
+        )}
+        {memo.refinement && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            {memo.refinement}
+          </Typography>
+        )}
+        {Array.isArray(memo.key_findings) && memo.key_findings.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              Key Findings
+            </Typography>
+            <Box component="ul" sx={{ pl: 3, my: 0 }}>
+              {memo.key_findings.map((finding, idx) => (
+                <li key={`report-finding-${idx}`}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {finding.statement}
+                  </Typography>
+                  {finding.insight && (
+                    <Typography variant="body2" color="text.secondary">
+                      {finding.insight}
+                    </Typography>
+                  )}
+                  <Box sx={{ mt: 0.5 }}>{renderSourceChips(finding.sources)}</Box>
+                </li>
+              ))}
+            </Box>
+          </Box>
+        )}
+        {Array.isArray(memo.evidence) && memo.evidence.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              Evidence Table
+            </Typography>
+            <Table size="small" sx={{ mt: 1 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell><strong>Finding</strong></TableCell>
+                  <TableCell><strong>Implication</strong></TableCell>
+                  <TableCell><strong>Sources</strong></TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {memo.evidence.map((row, idx) => (
+                  <TableRow key={`evidence-${idx}`}>
+                    <TableCell>{row.finding || '-'}</TableCell>
+                    <TableCell>{row.implication || '-'}</TableCell>
+                    <TableCell>{renderSourceChips(row.sources)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Box>
+        )}
+        {Array.isArray(memo.open_questions) && memo.open_questions.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              Open Questions
+            </Typography>
+            <Box component="ol" sx={{ pl: 3, my: 0 }}>
+              {memo.open_questions.map((question, idx) => (
+                <li key={`open-question-${idx}`}>
+                  <Typography variant="body2">{question}</Typography>
+                </li>
+              ))}
+            </Box>
+          </Box>
+        )}
+        {Array.isArray(memo.next_steps) && memo.next_steps.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              Recommended Next Steps
+            </Typography>
+            <Box component="ol" sx={{ pl: 3, my: 0 }}>
+              {memo.next_steps.map((step, idx) => (
+                <li key={`next-step-${idx}`}>
+                  <Typography variant="body2">{step}</Typography>
+                </li>
+              ))}
+            </Box>
+          </Box>
+        )}
+        {memo.notes && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
+            Notes: {memo.notes}
+          </Typography>
+        )}
+      </Box>
+    );
+  };
+
+  const handleRunDeepResearch = async () => {
+    if (!activeHistoryId) {
+      setDeepResearchError('Run a logged-in search before starting deep research.');
+      return;
+    }
+    if (!resolveAuthEmail()) {
+      setDeepResearchError('Please sign in to launch deep research.');
+      return;
+    }
+    if (!selectedPaperIds.length) {
+      setDeepResearchError('Select at least one paper to analyze.');
+      return;
+    }
+    const promptSource = deepResearchPrompt.trim() || researchTopic.trim() || text.trim() || 'Deep research investigation';
+    setDeepResearchLoading(true);
+    setDeepResearchError('');
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/api/deep_research`,
+        {
+          history_id: activeHistoryId,
+          selected_ids: selectedPaperIds,
+          prompt: promptSource,
+          instructions: deepResearchPrompt.trim() || undefined,
+          rounds: deepResearchRoundsCount,
+          breadth: deepResearchBreadth,
+          per_query_limit: deepResearchDocsPerQuery,
+          language: 'en',
+          user_email: resolveAuthEmail(),
+        },
+        {
+          headers: buildAuthHeaders(),
+        }
+      );
+      setDeepResearchResult(response.data);
+    } catch (researchErr) {
+      console.error(researchErr);
+      setDeepResearchError(researchErr?.response?.data?.error || 'Deep research failed. Please try again.');
+    } finally {
+      setDeepResearchLoading(false);
+    }
   };
 
   return (
@@ -852,15 +1150,24 @@ const ResearchPlanner = () => {
                                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                                             ID: {candidate.short_id || candidate.paper_id}
                                           </Typography>
-                                          <Button
-                                            size="small"
-                                            sx={{ mt: 1 }}
-                                            variant="contained"
-                                            onClick={() => handleSummaryCandidateClick(candidate, candidateIndex)}
-                                            disabled={!canChat || chatLoading}
-                                          >
-                                            Summarize this paper
-                                          </Button>
+                                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
+                                            <Button
+                                              size="small"
+                                              variant="contained"
+                                              onClick={() => handleSummaryCandidateClick(candidate, candidateIndex, 'quick')}
+                                              disabled={!canChat || chatLoading}
+                                            >
+                                              Quick summary
+                                            </Button>
+                                            <Button
+                                              size="small"
+                                              variant="outlined"
+                                              onClick={() => handleSummaryCandidateClick(candidate, candidateIndex, 'detailed')}
+                                              disabled={!canChat || chatLoading}
+                                            >
+                                              Detailed summary
+                                            </Button>
+                                          </Stack>
                                         </CardContent>
                                       </Card>
                                     );
@@ -902,6 +1209,223 @@ const ResearchPlanner = () => {
               </Box>
             </>
           )}
+          {results.length > 0 && (
+            <Card variant="outlined" sx={{ mt: 3, p: { xs: 1, sm: 2 } }}>
+              <CardContent>
+                <Stack
+                  direction={{ xs: 'column', sm: 'row' }}
+                  alignItems={{ xs: 'flex-start', sm: 'center' }}
+                  justifyContent="space-between"
+                  spacing={1}
+                >
+                  <Box>
+                    <Typography variant="h6">Deep Research</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Select the most relevant papers, describe what you want to uncover, and let the agent run multi-round
+                      gap analysis plus follow-up searches.
+                    </Typography>
+                  </Box>
+                  <Chip
+                    color={selectedPaperIds.length ? 'primary' : 'default'}
+                    label={`${selectedPaperIds.length} selected`}
+                  />
+                </Stack>
+
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle2">Add your PDFs</Typography>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
+                    <Button variant="outlined" component="label" size="small">
+                      Choose PDFs
+                      <input type="file" hidden accept="application/pdf" multiple onChange={handleDeepUploadChange} />
+                    </Button>
+                    <Button size="small" variant="contained" onClick={handleDeepUpload} disabled={!deepUploadFiles.length}>
+                      Upload to Deep Research
+                    </Button>
+                    {deepUploadStatus && (
+                      <Typography variant="caption" color={deepUploadStatus.includes('failed') ? 'error' : 'text.secondary'}>
+                        {deepUploadStatus}
+                      </Typography>
+                    )}
+                  </Stack>
+                  {deepUploadFiles.length > 0 && (
+                    <Typography variant="caption" color="text.secondary">
+                      {deepUploadFiles.length} file(s) selected
+                    </Typography>
+                  )}
+                </Box>
+
+                <TextField
+                  label="Deep research focus or instructions"
+                  multiline
+                  minRows={3}
+                  fullWidth
+                  value={deepResearchPrompt}
+                  onChange={(e) => setDeepResearchPrompt(e.target.value)}
+                  placeholder="Describe the hypotheses, gaps, or technical details you want the agent to pursue..."
+                  sx={{ mt: 2 }}
+                />
+
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mt: 2 }}>
+                  <TextField
+                    label="Rounds"
+                    type="number"
+                    value={deepResearchRoundsCount}
+                    onChange={(e) => setDeepResearchRoundsCount(Number(e.target.value))}
+                    InputProps={{ inputProps: { min: 1, max: 4 } }}
+                    sx={{ minWidth: 120 }}
+                  />
+                  <TextField
+                    label="Queries per round"
+                    type="number"
+                    value={deepResearchBreadth}
+                    onChange={(e) => setDeepResearchBreadth(Number(e.target.value))}
+                    InputProps={{ inputProps: { min: 1, max: 5 } }}
+                    sx={{ minWidth: 120 }}
+                  />
+                  <TextField
+                    label="Docs per query"
+                    type="number"
+                    value={deepResearchDocsPerQuery}
+                    onChange={(e) => setDeepResearchDocsPerQuery(Number(e.target.value))}
+                    InputProps={{ inputProps: { min: 1, max: 5 } }}
+                    sx={{ minWidth: 140 }}
+                  />
+                </Stack>
+
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center" sx={{ mt: 2 }}>
+                  <Button
+                    variant="contained"
+                    onClick={handleRunDeepResearch}
+                    disabled={!canDeepResearch || deepResearchLoading}
+                  >
+                    {deepResearchLoading ? 'Running deep research...' : 'Run Deep Research'}
+                  </Button>
+                  {!canDeepResearch && (
+                    <Typography variant="body2" color="text.secondary">
+                      Sign in, run a search, and select at least one parsed paper.
+                    </Typography>
+                  )}
+                </Stack>
+
+                {deepResearchLoading && <LinearProgress sx={{ mt: 2 }} />}
+
+                {deepResearchError && (
+                  <Alert severity="error" sx={{ mt: 2 }}>
+                    {deepResearchError}
+                  </Alert>
+                )}
+
+                {deepResearchResult && (
+                  <Box sx={{ mt: 3 }}>
+                    {renderDeepResearchReport()}
+                    <Typography variant="subtitle1" sx={{ mt: 3, fontWeight: 600 }}>
+                      Round insights
+                    </Typography>
+                    <Stack spacing={2} sx={{ mt: 1 }}>
+                      {(deepResearchResult.rounds || []).map((round, idx) => {
+                        const queries = Array.isArray(round.queries) ? round.queries : [];
+                        const findings = Array.isArray(round.findings) ? round.findings : [];
+                        const gaps = Array.isArray(round.missing) ? round.missing : [];
+                        const sources = Array.isArray(round.sources) ? round.sources : [];
+                        const roundLabel = round.round_index ?? idx + 1;
+                        return (
+                          <Card variant="outlined" key={`deep-round-${roundLabel}-${idx}`}>
+                            <CardContent>
+                              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                                Round {roundLabel}
+                              </Typography>
+                              {queries.length > 0 && (
+                                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                                  Queries: {queries.map((q) => q.query || q.focus || '').filter(Boolean).join('; ')}
+                                </Typography>
+                              )}
+                              {findings.length > 0 && (
+                                <Box sx={{ mt: 1 }}>
+                                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                    Findings
+                                  </Typography>
+                                  <Box component="ul" sx={{ pl: 3, my: 0 }}>
+                                    {findings.map((finding, idx) => (
+                                      <li key={`finding-${round.round_index}-${idx}`}>
+                                        <Typography variant="body2">{finding}</Typography>
+                                      </li>
+                                    ))}
+                                  </Box>
+                                </Box>
+                              )}
+                              {gaps.length > 0 && (
+                                <Box sx={{ mt: 1 }}>
+                                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                    Gaps / Follow-ups
+                                  </Typography>
+                                  <Box component="ul" sx={{ pl: 3, my: 0 }}>
+                                    {gaps.map((gap, idx) => (
+                                      <li key={`gap-${round.round_index}-${idx}`}>
+                                        <Typography variant="body2" color="text.secondary">
+                                          {gap}
+                                        </Typography>
+                                      </li>
+                                    ))}
+                                  </Box>
+                                </Box>
+                              )}
+                              {sources.length > 0 && (
+                                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                                  {sources.map((source) => (
+                                    <Chip
+                                      key={`${round.round_index}-${source.id || source.title}`}
+                                      size="small"
+                                      label={`${source.id || ''} ${source.title || ''}`.trim() || 'Source'}
+                                    />
+                                  ))}
+                                </Stack>
+                              )}
+                              {round.notes && (
+                                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                                  Notes: {round.notes}
+                                </Typography>
+                              )}
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </Stack>
+                    {Array.isArray(deepResearchResult?.metadata?.new_papers) && deepResearchResult.metadata.new_papers.length > 0 && (
+                      <Box sx={{ mt: 3 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                          Newly Retrieved Papers
+                        </Typography>
+                        <Stack spacing={1} sx={{ mt: 1 }}>
+                          {deepResearchResult.metadata.new_papers.map((paper, idx) => (
+                            <Card variant="outlined" key={`${paper.id || paper.paper_id || idx}`}>
+                              <CardContent sx={{ py: 1.5 }}>
+                                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                                  {paper.title || paper.paper_id || `Paper ${idx + 1}`}
+                                </Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                  {paper.paper_id || paper.id || ''}
+                                </Typography>
+                                {paper.summary && (
+                                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                                    {paper.summary.slice(0, 240)}
+                                  </Typography>
+                                )}
+                                {paper.link && (
+                                  <MuiLink href={paper.link} target="_blank" rel="noopener">
+                                    {paper.link}
+                                  </MuiLink>
+                                )}
+                              </CardContent>
+                            </Card>
+                          ))}
+                        </Stack>
+                      </Box>
+                    )}
+                  </Box>
+                )}
+              </CardContent>
+            </Card>
+          )}
           {error && (
             <Alert severity="error" sx={{ mt: 2 }}>
               {error}
@@ -920,6 +1444,7 @@ const ResearchPlanner = () => {
               <Table>
                 <TableHead>
                   <TableRow>
+                    <TableCell padding="checkbox"><strong>Use</strong></TableCell>
                     <TableCell><strong>Authors</strong></TableCell>
                     <TableCell><strong>Year</strong></TableCell>
                     <TableCell><strong>Title</strong></TableCell>
@@ -938,6 +1463,13 @@ const ResearchPlanner = () => {
                         selected={isSelected}
                         sx={{ bgcolor: isSelected ? 'rgba(25, 118, 210, 0.08)' : undefined }}
                       >
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            checked={isSelected}
+                            onChange={() => handleTogglePaperSelection(row.paper_id)}
+                            disabled={!row.paper_id}
+                          />
+                        </TableCell>
                         <TableCell>{Array.isArray(row.authors) && row.authors.length ? row.authors.join(', ') : '-'}</TableCell>
                         <TableCell>{row.publication_date || row.publication_year || '-'}</TableCell>
                         <TableCell>

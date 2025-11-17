@@ -141,7 +141,7 @@ class GeminiText:
         prompt: str,
         *,
         temperature: float = 0.7,
-        max_output_tokens: int = 1024,
+        max_output_tokens: int = 32768,
         candidate_count: int = 1,
     ) -> str:
         prompt_text = self._prepare_prompt(prompt)
@@ -198,7 +198,7 @@ class GeminiText:
         *,
         n: int = 3,
         temperature: float = 0.8,
-        max_output_tokens: int = 1024,
+        max_output_tokens: int = 32768,
     ) -> List[str]:
         prompt_text = self._prepare_prompt(prompt)
         url = _GEN_URL.format(model=self.model)

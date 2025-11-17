@@ -17,6 +17,10 @@ from server.services.orchestration_service import OrchestrationService
 from server.services.auth_service import register_user, login_user
 from ai_agents.services.pdf_builder import SummaryPdfBuilder
 from server.services.search_extension_tool import SearchExtensionTool
+from server.services.deep_research_service import DeepResearchService
+import os
+import tempfile
+from werkzeug.utils import secure_filename
 
 api_blueprint = Blueprint("api", __name__)
 
@@ -40,6 +44,10 @@ conversation_service.register_tool(SearchExtensionTool(academic_search_service))
 conversation_repository = ConversationRepository()
 summary_repository = SummaryRepository()
 summary_pdf_builder = SummaryPdfBuilder()
+deep_research_service = DeepResearchService(
+    history_repository=search_history_repository,
+    paper_repository=paper_repository,
+)
 
 
 from typing import Optional
@@ -239,6 +247,127 @@ def sync_history_selection(history_id: int):
     else:
         return jsonify({"error": "Missing selection payload"}), 400
     return jsonify({"detail": "selection updated"}), 200
+
+
+@api_blueprint.post("/deep_research")
+def run_deep_research():
+    payload = request.get_json(silent=True) or {}
+    history_id = payload.get("history_id")
+    if history_id is None:
+        return jsonify({"error": "history_id is required"}), 400
+    try:
+        history_id_int = int(history_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "history_id must be an integer"}), 400
+
+    user_id = _resolve_user_id(payload)
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    history_record = academic_search_service.load_history(history_id_int)
+    if not history_record or history_record.get("user_id") not in (None, user_id):
+        return jsonify({"error": "History not found"}), 404
+
+    selected_ids = payload.get("selected_ids") or payload.get("paper_ids") or []
+    prompt = (
+        payload.get("prompt")
+        or payload.get("question")
+        or payload.get("objective")
+        or history_record.get("query")
+        or ""
+    )
+    instructions = payload.get("instructions") or payload.get("requirements") or payload.get("notes")
+    language = payload.get("language") or "en"
+    rounds = payload.get("rounds") or payload.get("max_rounds") or 2
+    breadth = payload.get("breadth") or payload.get("queries_per_round") or 3
+    per_query_limit = payload.get("per_query_limit") or payload.get("documents_per_query") or 3
+
+    try:
+        result = deep_research_service.run_deep_research(
+            history_id=history_id_int,
+            selected_ids=selected_ids,
+            question=str(prompt or history_record.get("query") or ""),
+            instructions=str(instructions) if instructions is not None else None,
+            language=str(language or "en"),
+            rounds=rounds,
+            breadth=breadth,
+            per_query_limit=per_query_limit,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify(result), 200
+
+
+@api_blueprint.post("/deep_research/upload")
+def upload_deep_research_files():
+    history_id = request.form.get("history_id")
+    if history_id is None:
+        return jsonify({"error": "history_id is required"}), 400
+    try:
+        history_id_int = int(history_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "history_id must be an integer"}), 400
+
+    user_id = _resolve_user_id(request.form.to_dict())
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    history_record = academic_search_service.load_history(history_id_int)
+    if not history_record or history_record.get("user_id") not in (None, user_id):
+        return jsonify({"error": "History not found"}), 404
+
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files uploaded"}), 400
+
+    stored_papers = []
+    uploads_dir = Path(tempfile.gettempdir()) / "deep_research_uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    for file in files:
+        filename = secure_filename(file.filename or "upload.pdf")
+        if not filename.lower().endswith(".pdf"):
+            continue
+        paper_id = f"upload-{uuid.uuid4().hex}"
+        temp_path = uploads_dir / f"{paper_id}-{filename}"
+        file.save(temp_path)
+
+        paper_payload = {
+            "id": paper_id,
+            "paper_id": paper_id,
+            "title": filename,
+            "authors": [],
+            "publication_year": None,
+            "publication_date": "",
+            "source": "User upload",
+            "cited_by_count": 0,
+            "link": "",
+            "pdf_url": "",
+            "full_text": "",
+            "selected": True,
+        }
+        try:
+            paper_repository.upsert_many([paper_payload])
+            docling_service.ingest_pdf_now(paper_id, file_path=str(temp_path))
+            fulltext_map = paper_repository.fetch_fulltext_map([paper_id])
+            payload_full = fulltext_map.get(paper_id) or {}
+            paper_payload["full_text"] = payload_full.get("plain_text", "")
+            paper_payload["structured_sections"] = payload_full.get("structured_sections", {})
+            paper_payload["sections"] = payload_full.get("sections", [])
+            paper_payload["tables"] = payload_full.get("tables", [])
+            paper_payload["fulltext_metadata"] = payload_full.get("metadata", {})
+        except Exception as exc:  # pragma: no cover
+            return jsonify({"error": f"Failed to parse PDF: {exc}"}), 500
+
+        stored_papers.append(paper_payload)
+
+    if stored_papers:
+        search_history_repository.append_papers(history_id_int, stored_papers, selected=True)
+
+    return jsonify({"papers": stored_papers}), 200
 
 
 def enrich_fulltext_metadata(record: dict) -> None:
