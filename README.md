@@ -1,6 +1,6 @@
 # Project Template
 
-## Tech Stack
+##  Tech Stack
 - React for the browser experiences.
 - Flask for backend.
 - LangChain-driven agents for planning, retrieval, document processing, RAG drafting, and refinement loops.
