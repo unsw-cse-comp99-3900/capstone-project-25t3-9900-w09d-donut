@@ -1,6 +1,7 @@
 import uuid
 from pathlib import Path
 from typing import Optional
+import re
 
 from flask import Blueprint, jsonify, request, send_file, url_for
 
@@ -18,6 +19,7 @@ from server.services.auth_service import register_user, login_user
 from ai_agents.services.pdf_builder import SummaryPdfBuilder
 from server.services.search_extension_tool import SearchExtensionTool
 from server.services.deep_research_service import DeepResearchService
+from server.services.keyword_expansion_service import KeywordExpansionService
 import os
 import tempfile
 from werkzeug.utils import secure_filename
@@ -48,6 +50,7 @@ deep_research_service = DeepResearchService(
     history_repository=search_history_repository,
     paper_repository=paper_repository,
 )
+keyword_expansion_service = KeywordExpansionService()
 
 
 from typing import Optional
@@ -109,6 +112,43 @@ def refine_draft(request_id: str):
     # TODO: Validate refinement message and delegate to refinement module
     orchestration_service.refine_draft(request_id, payload)
     return jsonify({"detail": "Refinement request accepted"}), 202
+
+
+@api_blueprint.post("/keywords/expand")
+def expand_keywords():
+    payload = request.get_json(silent=True) or {}
+    raw_keywords = payload.get("keywords") or payload.get("seed") or payload.get("topic")
+    if isinstance(raw_keywords, str):
+        parts = [part.strip() for part in re.split(r"[,\n]", raw_keywords) if part.strip()]
+    elif isinstance(raw_keywords, (list, tuple)):
+        parts = [str(item).strip() for item in raw_keywords if str(item).strip()]
+    else:
+        parts = []
+
+    if not parts:
+        return jsonify({"error": "keywords are required"}), 400
+
+    language = payload.get("language") or "en"
+    hints = payload.get("context") or payload.get("notes")
+    limit = payload.get("max_terms")
+    try:
+        max_terms = int(limit) if limit is not None else 10
+    except (TypeError, ValueError):
+        max_terms = 10
+
+    try:
+        result = keyword_expansion_service.expand_keywords(
+            parts,
+            language=str(language),
+            hints=str(hints) if hints else None,
+            max_terms=max_terms,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify(result), 200
 
 @api_blueprint.post("/normal_search")
 def normal_search():
