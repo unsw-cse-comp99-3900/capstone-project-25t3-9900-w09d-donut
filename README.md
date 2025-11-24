@@ -9,29 +9,60 @@
 ## Repository Layout
 ```text
 .
-|-- client/                     # React application (forms, chat, deep research UI)
-|   |-- public/
+|-- client/                     # React SPA: basic pages & layout
 |   |-- src/
-|   |   |-- components/         # Minor shared UI helpers
-|   |   |-- hooks/              # Utilities such as auth snapshot helpers
-|   |   |-- pages/              # Auth experience (login/register)
-|   |   |-- services/           # HTTP clients (auth, orchestration, API client)
-|   |   |-- store/              # (currently unused placeholder)
-|   |   `-- App.js              # Research planner + conversation/deep research surface
-|   `-- package.json            # CRA scripts and deps
-|-- server/                     # Flask application (controllers, services, data access)
+|   |   |-- components/         # AppLayout, Sidebar
+|   |   |-- pages/              # Auth, Home, PlanReview, ResearchDashboard
+|   |   |-- services/           # apiClient, authApi, orchestrationService
+|   |   |-- store/              # (reserved for state management)
+|
+|-- server/                     # Flask backend
+|   |-- app.py                  # Flask app entrypoint
 |   |-- config/
+|   |   |-- settings.py         # Environment & app settings
 |   |-- controllers/
-|   |   `-- api_controller.py   # Normal search, keyword expansion, chat, summaries, deep research
-|   |-- data_access/
-|   |-- models/
+|   |   |-- api_controller.py   # Search, conversation, deep research endpoints
+|   |   |-- auth_controller.py  # /auth/register, /auth/login
 |   |-- services/
-|   `-- tests/
-|-- ai_agents/                  # Gemini agent adapters (conversation agent, summarizer, pdf builder, etc.)
-|-- storage/                    # SQLite helpers, cached PDFs, generated summaries
-|-- scripts/                    # Utilities (db checks, etc.)
-|-- requirements.txt            # Python dependencies for backend and agents
-`-- .env.example                # Environment variable template
+|   |   |-- academic_search.py  # OpenAlex-based search
+|   |   |-- ai_conversation_service.py  # Wraps ConversationAgent
+|   |   |-- deep_research_service.py    # Orchestrates deep research workflow
+|   |   |-- docling_service.py          # PDF ingestion (Docling/PyMuPDF)
+|   |   |-- pdf_cache_service.py        # PDF download & cache
+|   |   |-- auth_service.py             # JWT auth, password hashing
+|   |   |-- search_extension_tool.py    # Backend-side search extension tool
+|   |-- data_access/
+|   |   |-- user_repository.py
+|   |   |-- paper_repository.py
+|   |   |-- search_history_repository.py
+|   |   |-- conversation_repository.py
+|   |   |-- summary_repository.py
+|   |-- models/
+|       |-- research_request.py         # Request/data models
+|
+|-- ai_agents/                  # AI service layer (LLM + tools + agents)
+|   |-- llm/
+|   |   |-- gemini_client.py    # Unified Gemini client
+|   |-- services/
+|       |-- models.py           # AI-side models (PaperSummary, ConversationSession, etc.)
+|       |-- tooling.py          # AgentTool, ToolContext, ToolRegistry
+|       |-- summarizer.py       # PaperSummarizer + SummarizerTool
+|       |-- query_refiner.py    # KeywordExpansionTool
+|       |-- focused_synthesis.py# FocusedSynthesisTool
+|       |-- search_list_manager.py # Session-level paper catalogue
+|       |-- session_memory.py   # Conversation history & memory
+|       |-- conversation_agent.py# Core AI chat agent
+|       |-- deep_research.py    # DeepResearchAgent
+|       |-- pdf_builder.py      # SummaryPdfBuilder (PDF export)
+|
+|-- storage/
+|   |-- sqlite/                 # SQLite DB (file-based)
+|   |-- vector_store/           # ChromaDB client scaffold (TODO)
+|
+|-- docker-compose.yml
+|-- requirements.txt            # Python deps
+|-- package.json                # JS deps
+|-- .env.example                # Example env config
 ```
 
 ## Layer Responsibilities
