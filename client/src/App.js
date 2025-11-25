@@ -118,9 +118,9 @@ const ResearchPlanner = () => {
   const [focusType, setFocusType] = useState('Overview');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [pdfFiles, setPdfFiles] = useState([]);
-  const [uploadStatus, setUploadStatus] = useState('');
   const [keywords, setKeywords] = useState([]);
+  const [keywordExpansionStatus, setKeywordExpansionStatus] = useState('');
+  const [keywordExpansionLoading, setKeywordExpansionLoading] = useState(false);
   const [history, setHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
@@ -434,9 +434,9 @@ const ResearchPlanner = () => {
     setFocusType('Overview');
     setResult(null);
     setLoading(false);
-    setPdfFiles([]);
-    setUploadStatus('');
     setKeywords([]);
+    setKeywordExpansionStatus('');
+    setKeywordExpansionLoading(false);
     setResults([]);
     setError('');
     setShowHistory(false);
@@ -444,37 +444,69 @@ const ResearchPlanner = () => {
     resetDeepResearchState();
   };
 
-  const handleFileChange = (e) => {
-    setPdfFiles(e.target.files);
+  const cleanKeyword = (word) => {
+    const raw = (word || '').trim();
+    if (!raw || raw.startsWith('```')) {
+      return '';
+    }
+    let sanitized = raw
+      .replace(/```/g, '')
+      .replace(/[{}[\]`]+/g, '')
+      .replace(/^[\s"'<>/\\(),.:;!?-]+/, '')
+      .replace(/[\s"'<>/\\(),.:;!?-]+$/, '')
+      .trim();
+    if (!/[a-z0-9]/i.test(sanitized) || sanitized.length < 2) {
+      return '';
+    }
+    return sanitized;
   };
 
-  const handleUpload = async () => {
-    if (pdfFiles.length === 0) {
-      setUploadStatus('Please select at least one PDF file.');
+  const normalizeKeywordList = (list) => {
+    const seen = new Set();
+    const normalized = [];
+    (list || []).forEach((item) => {
+      const cleaned = cleanKeyword(item);
+      if (!cleaned) {
+        return;
+      }
+      const key = cleaned.toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      normalized.push(cleaned);
+    });
+    return normalized;
+  };
+
+  const handleExpandKeywords = async () => {
+    const seeds = researchTopic
+      ? researchTopic.split(/[,，\n]+/).map((word) => word.trim()).filter(Boolean)
+      : [];
+    if (seeds.length === 0) {
+      setKeywordExpansionStatus('Please enter at least one keyword before expanding.');
       return;
     }
-
-    const formData = new FormData();
-    for (let i = 0; i < pdfFiles.length; i++) {
-      formData.append('files', pdfFiles[i]);
-    }
-
-    setUploadStatus('Uploading...');
+    setKeywordExpansionLoading(true);
+    setKeywordExpansionStatus('');
     try {
-      const uploadHeaders = buildAuthHeaders();
-      const response = await fetch(`${API_BASE_URL}/upload_pdf`, {
-        method: 'POST',
-        body: formData,
-        headers: Object.keys(uploadHeaders).length ? uploadHeaders : undefined,
+      const response = await axios.post(`${API_BASE_URL}/api/keywords/expand`, {
+        keywords: seeds,
+        language: 'en',
+        ...(text.trim() ? { context: text.trim() } : {}),
       });
-      const data = await response.json();
-      setUploadStatus('Uploaded successfully.');
-      if (data.keywords && data.keywords.length > 0) {
-        setKeywords(data.keywords);
+      const expanded = normalizeKeywordList(response.data?.keywords || []);
+      if (expanded.length > 0) {
+        setKeywords(expanded);
+        setKeywordExpansionStatus(response.data?.reasoning || 'Expanded keywords generated.');
+      } else {
+        setKeywordExpansionStatus('AI did not return any additional keywords.');
       }
-    } catch (uploadError) {
-      console.error(uploadError);
-      setUploadStatus('Upload failed.');
+    } catch (expandErr) {
+      console.error(expandErr);
+      setKeywordExpansionStatus(expandErr?.response?.data?.error || 'Failed to expand keywords.');
+    } finally {
+      setKeywordExpansionLoading(false);
     }
   };
 
@@ -816,52 +848,24 @@ const ResearchPlanner = () => {
               sx={{ mb: 2 }}
             />
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
-              <Button variant="contained" component="label">
-                Upload PDFs
-                <input type="file" hidden accept="application/pdf" multiple onChange={handleFileChange} />
-              </Button>
-              <Button variant="outlined" onClick={handleUpload} disabled={pdfFiles.length === 0}>
-                Process Upload
+              <Button variant="contained" onClick={handleExpandKeywords} disabled={keywordExpansionLoading}>
+                {keywordExpansionLoading ? 'Expanding...' : 'Expand Keywords'}
               </Button>
             </Stack>
-            {pdfFiles.length > 0 && (
-              <Box sx={{ mt: 1 }}>
-                <Typography variant="body2" color="text.secondary">Selected files:</Typography>
-                {Array.from(pdfFiles).map((file, idx) => (
-                  <Box
-                    key={idx}
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      borderBottom: '1px solid #eee',
-                      py: 0.5,
-                    }}
-                  >
-                    <Typography variant="body2">{file.name}</Typography>
-                    <Button
-                      size="small"
-                      color="error"
-                      onClick={() => {
-                        const newFiles = Array.from(pdfFiles).filter((_, i) => i !== idx);
-                        setPdfFiles(newFiles);
-                      }}
-                    >
-                      Remove
-                    </Button>
-                  </Box>
-                ))}
-              </Box>
-            )}
-            {uploadStatus && (
-              <Alert severity={uploadStatus.includes('failed') ? 'error' : 'success'} sx={{ mt: 1 }}>
-                {uploadStatus}
+            {keywordExpansionStatus && (
+              <Alert
+                severity={/fail|error|required/i.test(keywordExpansionStatus) ? 'error' : 'info'}
+                sx={{ mt: 1 }}
+              >
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-line' }}>
+                  {keywordExpansionStatus}
+                </Typography>
               </Alert>
             )}
             {keywords.length > 0 && (
               <Box sx={{ mt: 2 }}>
                 <Typography variant="subtitle2" gutterBottom>
-                  Suggested keywords from PDF upload (click to add):
+                  AI-suggested keywords (click to add):
                 </Typography>
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                   {keywords.map((word) => (
