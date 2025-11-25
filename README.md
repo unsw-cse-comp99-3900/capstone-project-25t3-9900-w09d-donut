@@ -164,3 +164,160 @@
 - Run backend tests with `pytest server/tests`.
 - Use `scripts/check_db.py` or similar helpers for quick diagnostics.
 - Generated summary PDFs live under `storage/summary_pdfs`; cached PDFs and Docling outputs sit inside `storage/` as well.
+
+## System architecture
+```mermaid
+
+flowchart TD
+
+%% ================= Client & User ================
+subgraph Client["Client (React Web App)"]
+    UI["Search & Results UI"]
+    ChatUI["Chat & Summary UI"]
+    AuthUI["Auth UI"]
+end
+
+subgraph UserSide["User"]
+    EndUser["User (Browser)"]
+end
+
+EndUser --> UI
+EndUser --> ChatUI
+EndUser --> AuthUI
+
+%% ================= Backend ================
+subgraph Backend["Backend Server (Flask)"]
+    API["API Controller (api_blueprint)"]
+    AuthCtrl["Auth Controller"]
+    Orchestrator["OrchestrationService (stub)"]
+
+    subgraph SvcLayer["Service Layer"]
+        SearchSvc["AcademicSearchService"]
+        ConvSvc["AIConversationService"]
+        Docling["DoclingIngestionService"]
+        PdfCacheSvc["PDFCacheService"]
+        SummaryPdf["SummaryPdfBuilder"]
+        AuthSvc["AuthService"]
+        SearchToolSvc["SearchExtensionTool"]
+    end
+
+    subgraph RepoLayer["Data Access / Repositories"]
+        PaperRepo["PaperRepository"]
+        HistRepo["SearchHistoryRepository"]
+        ConvRepo["ConversationRepository"]
+        SummaryRepo["SummaryRepository"]
+        UserRepo["UserRepository"]
+    end
+end
+
+%% Client <-> Backend
+UI -->|"search & history REST"| API
+ChatUI -->|"chat, summaries REST"| API
+AuthUI -->|"register, login"| AuthCtrl
+
+API -->|"POST /normal_search"| SearchSvc
+API -->|"GET/POST search history, sessions"| SearchSvc
+API -->|"chat sessions & messages"| ConvSvc
+API -->|"summaries API"| ConvSvc
+API -->|"auth calls"| AuthSvc
+API -->|"research requests (not implemented)"| Orchestrator
+
+AuthCtrl -->|"register/login"| AuthSvc
+
+%% ================= AI Agent Layer ================
+subgraph AI["AI Agent Layer (LangChain-style)"]
+    ConvAgent["ConversationAgent"]
+    ToolReg["ToolRegistry"]
+    KwTool["KeywordExpansionTool"]
+    QuickTool["QuickSummaryTool"]
+    GlobalTool["GlobalSummaryTool"]
+    FocusTool["FocusedSynthesisTool"]
+    SearchTool["SearchExtensionTool (AI Tool)"]
+    Mem["SessionMemory"]
+    SearchMgr["SearchListManager"]
+    Summarizer["PaperSummarizer"]
+    GeminiClient["GeminiClient"]
+end
+
+%% Backend <-> AI layer
+ConvSvc -->|"create / load sessions"| ConvAgent
+ConvSvc -->|"register_tool(search_extension)"| ConvAgent
+ConvSvc -->|"AgentReply (text, citations, ids)"| API
+
+ConvAgent -->|"tool calls"| ToolReg
+ToolReg --> KwTool
+ToolReg --> QuickTool
+ToolReg --> GlobalTool
+ToolReg --> FocusTool
+ToolReg --> SearchTool
+
+ConvAgent --> Mem
+ConvAgent --> SearchMgr
+
+QuickTool --> Summarizer
+GlobalTool --> Summarizer
+FocusTool --> Summarizer
+Summarizer -->|"LLM prompt/response"| GeminiClient
+
+SearchTool -->|"search_and_append"| SearchSvc
+
+%% ================= Data Storage ================
+subgraph Storage["Data Storage"]
+    subgraph DB["SQLite DB (storage/sqlite/research.db)"]
+        SQLite["SQLite (research records, users, history, conversations, summaries)"]
+    end
+    PdfCacheDir["PDF Cache (storage/pdf_cache)"]
+    SummaryDir["Summary PDFs (storage/summary_pdfs)"]
+    PromptsDir["Prompt Logs (storage/prompts)"]
+    Chroma["ChromaVectorStore (placeholder, not implemented)"]
+end
+
+PaperRepo --> SQLite
+HistRepo --> SQLite
+ConvRepo --> SQLite
+SummaryRepo --> SQLite
+UserRepo --> SQLite
+
+PdfCacheSvc -->|"write PDF files"| PdfCacheDir
+SummaryPdf -->|"write summary PDFs"| SummaryDir
+Summarizer -->|"debug prompts"| PromptsDir
+
+%% ================= External Services ================
+subgraph External["External Services"]
+    OpenAlex["OpenAlex API (papers)"]
+    PdfHosts["PDF Hosts / arXiv PDF URLs"]
+    GeminiAPI["Gemini LLM API"]
+end
+
+SearchSvc -->|"HTTP request"| OpenAlex
+PdfCacheSvc -->|"download PDF"| PdfHosts
+Docling -->|"Docling + PyMuPDF libs"| PdfHosts
+
+GeminiClient -->|"HTTP LLM calls"| GeminiAPI
+
+%% Academic search pipeline
+SearchSvc -->|"upsert papers"| PaperRepo
+SearchSvc -->|"create history record"| HistRepo
+SearchSvc -->|"cache PDFs"| PdfCacheSvc
+SearchSvc -->|"enqueue for parsing"| Docling
+
+Docling -->|"parsed full text, sections, tables"| PaperRepo
+
+%% History -> AI conversation pipeline
+ConvSvc -->|"load history with papers"| HistRepo
+ConvSvc -->|"fetch fulltext map"| PaperRepo
+ConvSvc -->|"ingest PaperSummary list"| ConvAgent
+
+%% Conversation persistence & summaries
+API -->|"save chat messages, sessions"| ConvRepo
+API -->|"save summary metadata"| SummaryRepo
+SummaryPdf -->|"called from chat/summary APIs"| API
+
+%% Auth pipeline
+AuthSvc -->|"user CRUD"| UserRepo
+
+%% Optional / planned components (dashed)
+style Orchestrator stroke-dasharray: 5 5
+style Chroma stroke-dasharray: 5 5
+```
+
