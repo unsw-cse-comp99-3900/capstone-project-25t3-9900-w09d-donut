@@ -85,7 +85,7 @@
 - `remove paper 2 and paper 4 from the selection` → drops the specified papers from the working set (and persists the change).
 - `focus on safety benchmarks when summarizing` → asks the agent to center its reply on a specific aspect of the selected corpus.
 - `cite the papers about reinforcement learning safety` → returns formatted references for the relevant papers.
-- `summary of papers 1-3` / `quick summary for the uploaded report` → produces concise or detailed summaries with citations and (when applicable) downloadable PDFs.
+- `summarize the papers`  → produces concise or detailed summaries with citations and (when applicable) downloadable PDFs.
 
 ## Environment Setup
 - **Server**
