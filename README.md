@@ -321,3 +321,10 @@ style Orchestrator stroke-dasharray: 5 5
 style Chroma stroke-dasharray: 5 5
 ```
 
+### End-to-End Usage Flow
+1. **Register & log in** via the React UI (`/auth`) so searches and chat histories can be persisted to your account.
+2. **Input seed keywords** (or click “Expand Keywords”) to inspire new terms, then run the search form; the backend fetches OpenAlex papers and preselects them for downstream steps.
+3. **Chat with the AI** right after search completion—the server automatically ingests the retrieved papers, so you can use commands such as `summary`, `focus`, `list`, `remove`, `find more about`, or `cite` to manage evidence without leaving the chat pane.
+4. **Review & curate** the resulting paper list (toggle selections, upload your own PDFs) to define the corpus that deep research should consume.
+5. **Launch Deep Research** once satisfied with the corpus: configure rounds, queries per round, and docs per query; the backend runs multi-round Gemini planning + OpenAlex lookups and returns structured reports rooted in both the search results and any uploaded literature.
+
