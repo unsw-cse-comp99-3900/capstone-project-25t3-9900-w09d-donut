@@ -79,6 +79,14 @@
 4. Summaries can be requested explicitly (`POST /api/summaries`) or triggered from chat replies; they are stored and downloadable via `/api/chat/sessions/<id>/summaries/*`.
 5. Traditional `/api/requests/*` endpoints remain for future workflow orchestration but the current UI primarily uses the normal-search/chat/deep-research flows.
 
+## AI Chat Usage Examples
+- `list my current selection` → shows which papers are currently marked for chat/deep research.
+- `find more about compute-efficient LLM training` → invokes the search extension tool to pull additional OpenAlex papers on that topic.
+- `remove paper 2 and paper 4 from the selection` → drops the specified papers from the working set (and persists the change).
+- `focus on safety benchmarks when summarizing` → asks the agent to center its reply on a specific aspect of the selected corpus.
+- `cite the papers about reinforcement learning safety` → returns formatted references for the relevant papers.
+- `summary of papers 1-3` / `quick summary for the uploaded report` → produces concise or detailed summaries with citations and (when applicable) downloadable PDFs.
+
 ## Environment Setup
 - **Server**
   1. Create a Python 3.11 virtual environment.
